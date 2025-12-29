@@ -328,3 +328,96 @@ class PlacesClient:
             print(f"Error getting hotel details: {e}")
             return None
 
+    def get_place_photo_url(
+        self,
+        place_id: str,
+        max_width: int = 400
+    ) -> Optional[str]:
+        """
+        Get a photo URL for a place.
+
+        Args:
+            place_id: Google Places place_id
+            max_width: Maximum width of the photo
+
+        Returns:
+            Photo URL string or None if not available
+        """
+        if not place_id:
+            return None
+
+        try:
+            # Get place details to find photo references
+            place_details = self.client.place(place_id=place_id, fields=['photo'])
+            result = place_details.get('result', {})
+            photos = result.get('photos', [])
+
+            if not photos:
+                return None
+
+            # Get the first photo reference
+            photo_reference = photos[0].get('photo_reference')
+            if not photo_reference:
+                return None
+
+            # Construct the photo URL
+            api_key = config.GOOGLE_PLACES_API_KEY
+            photo_url = (
+                f"https://maps.googleapis.com/maps/api/place/photo"
+                f"?maxwidth={max_width}"
+                f"&photo_reference={photo_reference}"
+                f"&key={api_key}"
+            )
+
+            return photo_url
+
+        except Exception as e:
+            print(f"Error getting place photo: {e}")
+            return None
+
+    def get_place_with_photo(
+        self,
+        query: str,
+        location: Optional[Tuple[float, float]] = None
+    ) -> Optional[Dict[str, Any]]:
+        """
+        Search for a place and return its details including photo URL and coordinates.
+
+        Args:
+            query: Search query (place name)
+            location: Optional (lat, lng) tuple to bias search
+
+        Returns:
+            Dictionary with place details, coordinates, and photo URL
+        """
+        try:
+            # Search for the place
+            results = self.search_places(query=query, location=location)
+
+            if not results:
+                return None
+
+            best_match = results[0]
+            place_id = best_match.get('place_id')
+            location_data = best_match.get('location', {})
+
+            place_info = {
+                'name': best_match.get('name', ''),
+                'place_id': place_id,
+                'latitude': location_data.get('lat'),
+                'longitude': location_data.get('lng'),
+                'rating': best_match.get('rating'),
+                'vicinity': best_match.get('vicinity', ''),
+                'photo_url': None
+            }
+
+            # Get photo URL
+            if place_id:
+                place_info['photo_url'] = self.get_place_photo_url(place_id)
+
+            return place_info
+
+        except Exception as e:
+            print(f"Error getting place with photo: {e}")
+            return None
+

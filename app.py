@@ -15,6 +15,8 @@ from utils.flight_display import display_flight_comparison_table
 from utils.places_client import PlacesClient
 from utils.hotels_client import HotelsClient
 from utils.geocoding import GeocodingService
+from utils.map_display import create_itinerary_map, extract_places_from_plan
+from streamlit_folium import st_folium
 import config
 
 
@@ -696,7 +698,31 @@ def main():
                 
                 # Display the plan
                 display_travel_plan(plan, 1)
-                
+
+                # Display interactive map with itinerary
+                st.markdown("---")
+                st.markdown("### 🗺️ Itinerary Map")
+                st.caption("Click on markers to see place details and photos")
+
+                with st.spinner("Loading map with places..."):
+                    try:
+                        # Get places client for fetching coordinates and photos
+                        places_client = get_places_client()
+
+                        # Extract places from the plan
+                        places = extract_places_from_plan(plan, places_client)
+
+                        if places:
+                            # Create and display the map
+                            itinerary_map = create_itinerary_map(places)
+                            st_folium(itinerary_map, width=None, height=500, returned_objects=[])
+                            st.caption(f"Showing {len(places)} locations across your {duration}-day trip")
+                        else:
+                            st.info("Map coordinates not available for this itinerary. The places will be shown without map visualization.")
+
+                    except Exception as map_error:
+                        st.warning(f"Could not load map: {str(map_error)}")
+
             except Exception as e:
                 st.error(f"An error occurred: {str(e)}")
                 st.exception(e)
