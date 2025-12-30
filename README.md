@@ -1,24 +1,50 @@
-# ✈️ Travel Planner
+# Travel Planner
 
-A Streamlit-based travel planning application that generates personalized travel plans with multiple options based on different budgets and preferences.
+A full-stack travel planning application that generates personalized travel plans with multiple options based on different budgets and preferences. Features AI-powered itinerary generation with real-time flight search and place enrichment.
 
 ## Features
 
-- 🌍 **Multi-Plan Generation**: Creates 3 travel plan variants (Budget-Friendly, Balanced, Comfort-Focused)
-- ✈️ **Flight Recommendations**: Integrates with Amadeus API for real-time flight search and booking
-- 🏨 **Accommodation Suggestions**: Hotel recommendations with pricing
-- 📅 **Day-by-Day Itineraries**: Detailed daily schedules with activities for mornings, afternoons, and evenings
-- 💰 **Cost Breakdowns**: Complete cost analysis including transportation, accommodation, activities, food, and local transport
-- 🗺️ **Real Places Integration**: Uses Google Places API to enrich itineraries with real locations and ratings
+- **Multi-Plan Generation**: Creates 3 travel plan variants (Budget-Friendly, Balanced, Comfort-Focused)
+- **Flight Recommendations**: Integrates with Amadeus API for real-time flight search
+- **Accommodation Suggestions**: Hotel recommendations with pricing
+- **Day-by-Day Itineraries**: Detailed daily schedules with activities for mornings, afternoons, and evenings
+- **Cost Breakdowns**: Complete cost analysis including transportation, accommodation, activities, food, and local transport
+- **Real Places Integration**: Uses Google Places API to enrich itineraries with real locations, ratings, and photos
+- **Interactive Maps**: Visualize your itinerary with Leaflet maps (web) or native maps (mobile)
+- **Chat-Based Refinement**: Iteratively modify your travel plan through conversation
 
 ## Technology Stack
 
-- **Frontend**: Streamlit
-- **LLM**: OpenAI GPT-3.5-turbo (or DeepSeek)
-- **Flights API**: Amadeus Flight Offers Search API (with booking capability)
+- **Backend**: Node.js with Express.js
+- **Frontend**: Expo (React Native) with React Native Paper
+- **LLM**: OpenAI GPT-3.5-turbo
+- **Flights API**: Amadeus Flight Offers Search API
 - **Places API**: Google Places API
 - **Geocoding**: Google Geocoding API
-- **Language**: Python 3.8+
+- **Maps**: Leaflet (web) / react-native-maps (mobile)
+
+## Project Structure
+
+```
+travel-planner/
+├── backend/                    # Express.js API server
+│   ├── src/
+│   │   ├── server.js           # Express app and routes
+│   │   ├── travelPlanner.js    # Core planning logic
+│   │   ├── controllers/        # API endpoint handlers
+│   │   ├── models/             # Zod validation schemas
+│   │   └── services/           # API integrations (OpenAI, Amadeus, Google)
+│   └── package.json
+├── frontend/                   # Expo React Native app
+│   ├── src/
+│   │   ├── screens/            # App screens (ItineraryScreen)
+│   │   ├── components/         # Reusable components (MapComponent)
+│   │   └── services/           # API client
+│   ├── App.js
+│   └── package.json
+├── run.sh                      # Script to run both services
+└── .env                        # Environment variables
+```
 
 ## Setup Instructions
 
@@ -31,10 +57,18 @@ cd travel-planner
 
 ### 2. Install Dependencies
 
+Install dependencies for both backend and frontend:
+
 ```bash
-conda create -n travel-planner
-conda activate travel-planner
-pip install -r requirements.txt
+# Install backend dependencies
+cd backend
+npm install
+
+# Install frontend dependencies
+cd ../frontend
+npm install
+
+cd ..
 ```
 
 ### 3. Set Up API Keys
@@ -42,11 +76,10 @@ pip install -r requirements.txt
 Create a `.env` file in the root directory:
 
 ```bash
-# LLM API Key (choose one)
+# OpenAI API Key
 OPENAI_API_KEY=sk-your-openai-api-key-here
-# DEEPSEEK_API_KEY=your-deepseek-api-key-here
 
-# Amadeus API (for Flight Search and Booking)
+# Amadeus API (for Flight Search)
 AMADEUS_CLIENT_ID=your-amadeus-client-id-here
 AMADEUS_CLIENT_SECRET=your-amadeus-client-secret-here
 AMADEUS_ENVIRONMENT=test  # Use "test" for sandbox or "production" for live
@@ -55,8 +88,6 @@ AMADEUS_ENVIRONMENT=test  # Use "test" for sandbox or "production" for live
 GOOGLE_PLACES_API_KEY=your-google-places-api-key-here
 GOOGLE_GEOCODING_API_KEY=your-google-geocoding-api-key-here
 ```
-
-**For Streamlit Cloud deployment**, use Streamlit Secrets (see Streamlit Cloud app settings).
 
 **Important**: Set usage limits and restrictions on your API keys in provider dashboards.
 
@@ -74,28 +105,66 @@ GOOGLE_GEOCODING_API_KEY=your-google-geocoding-api-key-here
 3. Create a new app in your dashboard
 4. Get your `CLIENT_ID` and `CLIENT_SECRET`
 5. Use the test environment for development (free tier available)
-6. The Amadeus API provides real-time flight search and booking capabilities from over 500 airlines
 
 #### Google Places API Key
 1. Go to [Google Cloud Console](https://console.cloud.google.com/)
 2. Create a new project or select existing one
 3. Enable "Places API" and "Geocoding API"
 4. Go to "Credentials" and create an API key
-5. The $200 free credit should cover most usage
 
-### 5. Run the Application
+## Running the Application
+
+### Quick Start (Recommended)
+
+Use the provided script to start both backend and frontend simultaneously:
 
 ```bash
-streamlit run app.py
+./run.sh
 ```
 
-The app will open in your default web browser at `http://localhost:8501`
+This will:
+- Start the backend server on `http://localhost:3000`
+- Start the frontend web app (Expo) on `http://localhost:8081`
 
-### 6. Deploy to Streamlit Cloud (Optional)
+Press `Ctrl+C` to stop both services.
 
-For deploying to Streamlit Cloud:
-1. Push your code to GitHub
-2. Connect your repository to [Streamlit Cloud](https://streamlit.io/cloud)
-3. Streamlit will automatically detect `requirements.txt`
-4. Set up your API keys in Streamlit Secrets (see Streamlit Cloud app settings)
-5. Deploy!
+### Manual Start
+
+If you prefer to run services separately:
+
+**Terminal 1 - Backend:**
+```bash
+cd backend
+npm start
+```
+
+**Terminal 2 - Frontend:**
+```bash
+cd frontend
+npm run web
+```
+
+### Development Mode
+
+For development with auto-reload:
+
+**Backend (with nodemon):**
+```bash
+cd backend
+npm run dev
+```
+
+**Frontend (Expo dev server):**
+```bash
+cd frontend
+npm start
+```
+
+## API Endpoints
+
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/health` | GET | Health check |
+| `/api/generate-plan` | POST | Generate initial travel plan |
+| `/api/modify-plan` | POST | Modify existing plan via chat |
+| `/api/autocomplete` | GET | Location autocomplete suggestions |
