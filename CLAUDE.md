@@ -43,12 +43,11 @@ This is a full-stack AI travel planning application with a Node.js/Express backe
 ### Backend (`/backend/src/`)
 
 - **server.js** - Express app with API routes
-- **travelPlanner.js** - Core orchestration that coordinates LLM, flights, and places enrichment
+- **travelPlanner.js** - Core orchestration that coordinates LLM and places enrichment
 - **controllers/plannerController.js** - API endpoint handlers with Zod validation
 - **models/travelPlan.js** - Zod schemas defining TravelPlan, DayItinerary, Activity structures
 - **services/** - External API integrations:
   - `llmClient.js` - OpenAI GPT-3.5-turbo for itinerary generation
-  - `amadeusClient.js` - Flight search API
   - `placesClient.js` - Google Places for activity enrichment (real coordinates, photos, ratings)
   - `geocodingService.js` - Location coordinate lookup
 
@@ -57,6 +56,7 @@ This is a full-stack AI travel planning application with a Node.js/Express backe
 - **screens/ItineraryScreen.js** - Main interface with chat-based plan refinement
 - **components/MapComponent.js** - Native mobile maps (react-native-maps)
 - **components/MapComponent.web.js** - Web maps (Leaflet) - platform-specific file
+- **components/DetailedItineraryView.js** - Day-by-day itinerary display with activity details and links
 - **services/api.js** - Axios client with platform-aware base URL (Android emulator uses `10.0.2.2`)
 
 ### Data Flow
@@ -78,7 +78,7 @@ This is a full-stack AI travel planning application with a Node.js/Express backe
 
 ## Environment Variables
 
-Required in `.env` at project root:
+Required in `backend/.env`:
 - `OPENAI_API_KEY` - For itinerary generation
-- `AMADEUS_CLIENT_ID`, `AMADEUS_CLIENT_SECRET` - Flight search (use `AMADEUS_ENVIRONMENT=test` for sandbox)
-- `GOOGLE_PLACES_API_KEY`, `GOOGLE_GEOCODING_API_KEY` - Location enrichment
+- `GOOGLE_PLACES_API_KEY` - Google Places for activity enrichment
+- `GOOGLE_GEOCODING_API_KEY` - Location coordinate lookup
