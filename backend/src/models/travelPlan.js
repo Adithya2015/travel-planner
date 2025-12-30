@@ -44,6 +44,7 @@ const ActivitySchema = z.object({
     notes: z.string().optional().nullable(),
     rating: z.number().optional().nullable(),
     user_ratings_total: z.number().optional().nullable(),
+    place_id: z.string().optional().nullable(),
 });
 
 const DayItinerarySchema = z.object({

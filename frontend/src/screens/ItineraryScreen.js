@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { View, ScrollView, StyleSheet, Alert } from 'react-native';
+import { View, ScrollView, StyleSheet, Alert, Linking, TouchableOpacity } from 'react-native';
 import { Text, Title, Paragraph, List, Button, Divider, TextInput as PaperInput, ActivityIndicator } from 'react-native-paper';
 import { generatePlan, modifyPlan } from '../services/api';
 import MapComponent from '../components/MapComponent';
@@ -222,7 +222,16 @@ const ItineraryScreen = ({ route, navigation }) => {
                                                 <View key={slot}>
                                                     <Text style={styles.timeSlot}>{slot.charAt(0).toUpperCase() + slot.slice(1)}</Text>
                                                     {day[slot]?.map((act, i) => (
-                                                        <Paragraph key={`${slot}-${i}`}>• {act.name}</Paragraph>
+                                                        act.place_id ? (
+                                                            <TouchableOpacity
+                                                                key={`${slot}-${i}`}
+                                                                onPress={() => Linking.openURL(`https://www.google.com/maps/place/?q=place_id:${act.place_id}`)}
+                                                            >
+                                                                <Paragraph style={styles.placeLink}>• {act.name}</Paragraph>
+                                                            </TouchableOpacity>
+                                                        ) : (
+                                                            <Paragraph key={`${slot}-${i}`}>• {act.name}</Paragraph>
+                                                        )
                                                     ))}
                                                     <Divider style={styles.divider} />
                                                 </View>
@@ -289,8 +298,8 @@ const styles = StyleSheet.create({
         flexGrow: 1,
     },
     mapContainer: {
-        height: 400,
-        minHeight: 300,
+        height: 600,
+        minHeight: 500,
     },
     chatPanel: {
         flex: 0.4,
@@ -406,6 +415,10 @@ const styles = StyleSheet.create({
     },
     divider: {
         marginVertical: 10,
+    },
+    placeLink: {
+        color: '#1a73e8',
+        textDecorationLine: 'underline',
     },
 });
 

@@ -89,7 +89,13 @@ class PlacesClient {
 
     async enrichActivityWithPlaces(activityName, location, activityType = "tourist_attraction") {
         try {
-            const places = await this.searchPlaces(activityName, location, 2000, activityType);
+            // First try nearby search with larger radius (50km for spread out attractions)
+            let places = await this.searchPlaces(activityName, location, 50000, activityType);
+
+            // If no results, try text search without location constraint
+            if (!places || places.length === 0) {
+                places = await this.searchPlaces(activityName, null, null, activityType);
+            }
 
             if (places && places.length > 0) {
                 // Return best match (highest rating)

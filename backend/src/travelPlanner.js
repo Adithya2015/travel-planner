@@ -107,6 +107,7 @@ class TravelPlanner {
                                 activity.location = placeData.vicinity;
                                 activity.user_ratings_total = placeData.user_ratings_total;
                                 activity.coordinates = placeData.location;
+                                activity.place_id = placeData.place_id;
                             }
                         }
                         enrichedActivities.push(activity);

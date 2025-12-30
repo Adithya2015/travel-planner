@@ -1,6 +1,6 @@
 import React, { useEffect, useState, useCallback } from 'react';
 import { View, StyleSheet, Text, ActivityIndicator } from 'react-native';
-import { GoogleMap, useJsApiLoader, Marker, InfoWindow } from '@react-google-maps/api';
+import { GoogleMap, useJsApiLoader, Marker, InfoWindow, Polyline } from '@react-google-maps/api';
 import { getConfig } from '../services/api';
 
 const containerStyle = {
@@ -26,17 +26,20 @@ const MapComponent = ({ itinerary }) => {
     const locations = [];
     if (itinerary) {
         itinerary.forEach((day, dayIndex) => {
-            ['morning', 'afternoon', 'evening'].forEach(slot => {
+            const dayNumber = day.day_number || (dayIndex + 1);
+            ['morning', 'afternoon', 'evening'].forEach((slot, slotIndex) => {
                 if (day[slot]) {
-                    day[slot].forEach(act => {
-                        if (act.coordinates && act.coordinates.lat) {
+                    day[slot].forEach((act, actIndex) => {
+                        if (act.coordinates && act.coordinates.lat && act.coordinates.lng) {
                             locations.push({
                                 name: act.name,
                                 lat: act.coordinates.lat,
                                 lng: act.coordinates.lng,
                                 slot: slot,
-                                day: day.day_number,
-                                desc: `Day ${day.day_number} - ${slot}`
+                                slotIndex: slotIndex,
+                                actIndex: actIndex,
+                                day: dayNumber,
+                                desc: `Day ${dayNumber} - ${slot}`
                             });
                         }
                     });
@@ -77,6 +80,20 @@ const MapComponent = ({ itinerary }) => {
     );
 };
 
+// Color palette for different days
+const DAY_COLORS = [
+    '#E53935', // Red
+    '#1E88E5', // Blue
+    '#43A047', // Green
+    '#FB8C00', // Orange
+    '#8E24AA', // Purple
+    '#00ACC1', // Cyan
+    '#FFB300', // Amber
+    '#5E35B1', // Deep Purple
+    '#D81B60', // Pink
+    '#00897B', // Teal
+];
+
 // Inner component that renders after API is loaded
 const GoogleMapContent = ({ apiKey, locations, itinerary }) => {
     const [selectedMarker, setSelectedMarker] = useState(null);
@@ -85,6 +102,31 @@ const GoogleMapContent = ({ apiKey, locations, itinerary }) => {
     const { isLoaded, loadError } = useJsApiLoader({
         googleMapsApiKey: apiKey
     });
+
+    // Group locations by day for polylines
+    const locationsByDay = {};
+    locations.forEach(loc => {
+        if (loc.day == null) return; // Skip if day is null/undefined
+        if (!locationsByDay[loc.day]) {
+            locationsByDay[loc.day] = [];
+        }
+        locationsByDay[loc.day].push(loc);
+    });
+
+    // Sort locations within each day by time slot order, then by activity index
+    Object.keys(locationsByDay).forEach(day => {
+        locationsByDay[day].sort((a, b) => {
+            if (a.slotIndex !== b.slotIndex) return a.slotIndex - b.slotIndex;
+            return a.actIndex - b.actIndex;
+        });
+    });
+
+    // Get color for a specific day (with robust handling)
+    const getDayColor = (dayNumber) => {
+        const num = Number(dayNumber);
+        if (isNaN(num) || num < 1) return DAY_COLORS[0];
+        return DAY_COLORS[(num - 1) % DAY_COLORS.length];
+    };
 
     // Fit bounds when map loads
     const onLoad = useCallback((mapInstance) => {
@@ -105,16 +147,11 @@ const GoogleMapContent = ({ apiKey, locations, itinerary }) => {
         }
     }, [map, itinerary]);
 
-    // Get marker color based on time slot (only call when API is loaded)
-    const getMarkerIcon = (slot) => {
-        const colors = {
-            morning: '#4CAF50',   // green
-            afternoon: '#FF9800', // orange
-            evening: '#2196F3'    // blue
-        };
+    // Get marker icon based on day (only call when API is loaded)
+    const getMarkerIcon = (dayNumber) => {
         return {
             path: window.google.maps.SymbolPath.CIRCLE,
-            fillColor: colors[slot] || '#F44336',
+            fillColor: getDayColor(dayNumber),
             fillOpacity: 1,
             strokeColor: '#ffffff',
             strokeWeight: 2,
@@ -150,11 +187,27 @@ const GoogleMapContent = ({ apiKey, locations, itinerary }) => {
                 fullscreenControl: true
             }}
         >
+            {/* Draw polylines connecting locations for each day */}
+            {Object.entries(locationsByDay)
+                .filter(([day, dayLocations]) => dayLocations.length >= 2)
+                .map(([day, dayLocations]) => (
+                    <Polyline
+                        key={`polyline-day-${day}`}
+                        path={dayLocations.map(loc => ({ lat: loc.lat, lng: loc.lng }))}
+                        options={{
+                            strokeColor: getDayColor(parseInt(day)) || '#666666',
+                            strokeOpacity: 0.8,
+                            strokeWeight: 4
+                        }}
+                    />
+                ))}
+
+            {/* Draw markers for each location */}
             {locations.map((loc, idx) => (
                 <Marker
                     key={idx}
                     position={{ lat: loc.lat, lng: loc.lng }}
-                    icon={getMarkerIcon(loc.slot)}
+                    icon={getMarkerIcon(loc.day)}
                     onClick={() => setSelectedMarker(loc)}
                 />
             ))}
@@ -176,9 +229,9 @@ const GoogleMapContent = ({ apiKey, locations, itinerary }) => {
 
 const styles = StyleSheet.create({
     container: {
-        height: 400,
+        height: '100%',
         width: '100%',
-        marginBottom: 15,
+        minHeight: 500,
         borderRadius: 12,
         overflow: 'hidden',
         borderWidth: 1,

@@ -50,7 +50,7 @@ This is a full-stack AI travel planning application with a Node.js/Express backe
   - `llmClient.js` - OpenAI GPT-3.5-turbo for itinerary generation
   - `placesClient.js` - Google Places for activity enrichment (real coordinates, photos, ratings)
   - `geocodingService.js` - Location coordinate lookup
-
+  
 ### Frontend (`/frontend/src/`)
 
 - **screens/ItineraryScreen.js** - Main interface with chat-based plan refinement
