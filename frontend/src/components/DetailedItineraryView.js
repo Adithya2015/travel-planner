@@ -32,6 +32,83 @@ const DetailedItineraryView = ({ itinerary }) => {
         }
     };
 
+    const getMealIcon = (mealType) => {
+        switch (mealType) {
+            case 'breakfast': return 'coffee';
+            case 'lunch': return 'food';
+            case 'dinner': return 'food-variant';
+            default: return 'silverware-fork-knife';
+        }
+    };
+
+    const getMealColor = (mealType) => {
+        switch (mealType) {
+            case 'breakfast': return '#8D6E63';
+            case 'lunch': return '#66BB6A';
+            case 'dinner': return '#7E57C2';
+            default: return '#1f77b4';
+        }
+    };
+
+    const renderMeal = (meal, mealType) => {
+        if (!meal || !meal.name) return null;
+        const mapsUrl = getGoogleMapsUrl(meal.coordinates, meal.name);
+
+        return (
+            <View style={styles.mealCard}>
+                <View style={styles.mealHeader}>
+                    <Chip
+                        icon={getMealIcon(mealType)}
+                        style={[styles.mealChip, { backgroundColor: getMealColor(mealType) }]}
+                        textStyle={styles.mealChipText}
+                    >
+                        {mealType.charAt(0).toUpperCase() + mealType.slice(1)}
+                    </Chip>
+                </View>
+                <View style={styles.activityCard}>
+                    <Text style={styles.activityName}>{meal.name}</Text>
+
+                    {meal.timeSlot && (
+                        <Text style={styles.activityTime}>{meal.timeSlot}</Text>
+                    )}
+
+                    {meal.description && (
+                        <Paragraph style={styles.activityDescription}>
+                            {meal.description}
+                        </Paragraph>
+                    )}
+
+                    <View style={styles.metaRow}>
+                        {meal.cuisine && (
+                            <Chip icon="food" style={styles.metaChip} textStyle={styles.metaChipText}>
+                                {meal.cuisine}
+                            </Chip>
+                        )}
+                        {meal.estimatedCost !== undefined && meal.estimatedCost !== null && (
+                            <Chip icon="currency-usd" style={styles.metaChip} textStyle={styles.metaChipText}>
+                                ${meal.estimatedCost}
+                            </Chip>
+                        )}
+                        {meal.rating && (
+                            <Chip icon="star" style={styles.metaChip} textStyle={styles.metaChipText}>
+                                {meal.rating}
+                            </Chip>
+                        )}
+                    </View>
+
+                    {mapsUrl && (
+                        <TouchableOpacity
+                            onPress={() => openLink(mapsUrl)}
+                            style={styles.mapLink}
+                        >
+                            <Text style={styles.mapLinkText}>View on Maps</Text>
+                        </TouchableOpacity>
+                    )}
+                </View>
+            </View>
+        );
+    };
+
     if (!itinerary || itinerary.length === 0) {
         return null;
     }
@@ -51,75 +128,88 @@ const DetailedItineraryView = ({ itinerary }) => {
                             <Text style={styles.dayDate}>{day.date}</Text>
                         </View>
 
+                        {/* Render meals and activities in chronological order */}
+                        {renderMeal(day.breakfast, 'breakfast')}
+
                         {['morning', 'afternoon', 'evening'].map(slot => {
+                            // Render associated meal before activities
+                            const mealForSlot = slot === 'afternoon' ? day.lunch : slot === 'evening' ? day.dinner : null;
                             const activities = day[slot];
-                            if (!activities || activities.length === 0) return null;
+                            const hasContent = mealForSlot?.name || (activities && activities.length > 0);
+                            if (!hasContent) return null;
 
                             return (
-                                <View key={slot} style={styles.slotSection}>
-                                    <View style={styles.slotHeader}>
-                                        <Chip
-                                            icon={getTimeSlotIcon(slot)}
-                                            style={[styles.slotChip, { backgroundColor: getTimeSlotColor(slot) }]}
-                                            textStyle={styles.slotChipText}
-                                        >
-                                            {slot.charAt(0).toUpperCase() + slot.slice(1)}
-                                        </Chip>
-                                    </View>
+                                <View key={slot}>
+                                    {/* Render lunch before afternoon, dinner before evening */}
+                                    {mealForSlot && renderMeal(mealForSlot, mealForSlot.type || (slot === 'afternoon' ? 'lunch' : 'dinner'))}
 
-                                    {activities.map((activity, actIdx) => (
-                                        <View key={actIdx} style={styles.activityCard}>
-                                            <Text style={styles.activityName}>{activity.name}</Text>
-
-                                            {activity.time && (
-                                                <Text style={styles.activityTime}>{activity.time}</Text>
-                                            )}
-
-                                            {activity.description && (
-                                                <Paragraph style={styles.activityDescription}>
-                                                    {activity.description}
-                                                </Paragraph>
-                                            )}
-
-                                            <View style={styles.metaRow}>
-                                                {activity.duration && (
-                                                    <Chip icon="clock-outline" style={styles.metaChip} textStyle={styles.metaChipText}>
-                                                        {activity.duration}
-                                                    </Chip>
-                                                )}
-                                                {activity.cost !== undefined && activity.cost !== null && (
-                                                    <Chip icon="currency-usd" style={styles.metaChip} textStyle={styles.metaChipText}>
-                                                        ${activity.cost}
-                                                    </Chip>
-                                                )}
-                                                {activity.rating && (
-                                                    <Chip icon="star" style={styles.metaChip} textStyle={styles.metaChipText}>
-                                                        {activity.rating}
-                                                    </Chip>
-                                                )}
+                                    {activities && activities.length > 0 && (
+                                        <View style={styles.slotSection}>
+                                            <View style={styles.slotHeader}>
+                                                <Chip
+                                                    icon={getTimeSlotIcon(slot)}
+                                                    style={[styles.slotChip, { backgroundColor: getTimeSlotColor(slot) }]}
+                                                    textStyle={styles.slotChipText}
+                                                >
+                                                    {slot.charAt(0).toUpperCase() + slot.slice(1)}
+                                                </Chip>
                                             </View>
 
-                                            {activity.practical_tips && (
-                                                <View style={styles.tipsBox}>
-                                                    <Text style={styles.tipsLabel}>Tip:</Text>
-                                                    <Text style={styles.tipsText}>{activity.practical_tips}</Text>
+                                            {activities.map((activity, actIdx) => (
+                                                <View key={actIdx} style={styles.activityCard}>
+                                                    <Text style={styles.activityName}>{activity.name}</Text>
+
+                                                    {activity.time && (
+                                                        <Text style={styles.activityTime}>{activity.time}</Text>
+                                                    )}
+
+                                                    {activity.description && (
+                                                        <Paragraph style={styles.activityDescription}>
+                                                            {activity.description}
+                                                        </Paragraph>
+                                                    )}
+
+                                                    <View style={styles.metaRow}>
+                                                        {activity.duration && (
+                                                            <Chip icon="clock-outline" style={styles.metaChip} textStyle={styles.metaChipText}>
+                                                                {activity.duration}
+                                                            </Chip>
+                                                        )}
+                                                        {activity.cost !== undefined && activity.cost !== null && (
+                                                            <Chip icon="currency-usd" style={styles.metaChip} textStyle={styles.metaChipText}>
+                                                                ${activity.cost}
+                                                            </Chip>
+                                                        )}
+                                                        {activity.rating && (
+                                                            <Chip icon="star" style={styles.metaChip} textStyle={styles.metaChipText}>
+                                                                {activity.rating}
+                                                            </Chip>
+                                                        )}
+                                                    </View>
+
+                                                    {activity.practical_tips && (
+                                                        <View style={styles.tipsBox}>
+                                                            <Text style={styles.tipsLabel}>Tip:</Text>
+                                                            <Text style={styles.tipsText}>{activity.practical_tips}</Text>
+                                                        </View>
+                                                    )}
+
+                                                    {activity.coordinates && (
+                                                        <TouchableOpacity
+                                                            onPress={() => openLink(getGoogleMapsUrl(activity.coordinates, activity.name))}
+                                                            style={styles.mapLink}
+                                                        >
+                                                            <Text style={styles.mapLinkText}>View on Maps</Text>
+                                                        </TouchableOpacity>
+                                                    )}
+
+                                                    {actIdx < activities.length - 1 && (
+                                                        <Divider style={styles.activityDivider} />
+                                                    )}
                                                 </View>
-                                            )}
-
-                                            {activity.coordinates && (
-                                                <TouchableOpacity
-                                                    onPress={() => openLink(getGoogleMapsUrl(activity.coordinates, activity.name))}
-                                                    style={styles.mapLink}
-                                                >
-                                                    <Text style={styles.mapLinkText}>View on Maps</Text>
-                                                </TouchableOpacity>
-                                            )}
-
-                                            {actIdx < activities.length - 1 && (
-                                                <Divider style={styles.activityDivider} />
-                                            )}
+                                            ))}
                                         </View>
-                                    ))}
+                                    )}
                                 </View>
                             );
                         })}
@@ -252,6 +342,19 @@ const styles = StyleSheet.create({
     activityDivider: {
         marginTop: 15,
         marginBottom: 10,
+    },
+    mealCard: {
+        marginBottom: 15,
+    },
+    mealHeader: {
+        marginBottom: 10,
+    },
+    mealChip: {
+        alignSelf: 'flex-start',
+    },
+    mealChipText: {
+        color: '#fff',
+        fontWeight: 'bold',
     },
 });
 

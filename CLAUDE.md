@@ -47,33 +47,52 @@ This is a full-stack AI travel planning application with a Node.js/Express backe
 - **controllers/plannerController.js** - API endpoint handlers with Zod validation
 - **models/travelPlan.js** - Zod schemas defining TravelPlan, DayItinerary, Activity structures
 - **services/** - External API integrations:
-  - `llmClient.js` - OpenAI GPT-3.5-turbo for itinerary generation
+  - `llmClient.js` - OpenAI for itinerary generation with workflow-specific methods
   - `placesClient.js` - Google Places for activity enrichment (real coordinates, photos, ratings)
   - `geocodingService.js` - Location coordinate lookup
-  
+  - `sessionStore.js` - In-memory session management with 30-min TTL
+  - `prompts.js` - Externalized LLM prompts for each workflow state
+
 ### Frontend (`/frontend/src/`)
 
-- **screens/ItineraryScreen.js** - Main interface with chat-based plan refinement
+- **screens/ItineraryScreen.js** - Main interface with session-based workflow state machine
 - **components/MapComponent.js** - Native mobile maps (react-native-maps)
-- **components/MapComponent.web.js** - Web maps (Leaflet) - platform-specific file
+- **components/MapComponent.web.js** - Web maps (Google Maps) - platform-specific file
+- **components/SkeletonView.js** - Display day themes and progress during planning
 - **components/DetailedItineraryView.js** - Day-by-day itinerary display with activity details and links
-- **services/api.js** - Axios client with platform-aware base URL (Android emulator uses `10.0.2.2`)
+- **services/api.js** - Axios client with session-based API functions
 
 ### Data Flow
 
-1. Map view on the left, and chat sidebar on the right
-2. AI bot first get basic details, like destination, duration of trip, and presents a basic itinerary
-3. User can iteratively refine plan through chat - conversation history maintained client-side
-4. The itinerary keeps updating on the refinements
-5. When the user is finished, a detailed day-by-day itinerary is generated below the map, containing clickable links
+1. Map view on the left (60%), chat sidebar on the right (40%)
+2. Session-based workflow with the following states:
+   1. **INFO_GATHERING** - Collect destination, dates, interests via chat. Proceeds when required info is complete.
+   2. **SKELETON** - Generate day themes only (no detailed activities). User reviews the high-level plan.
+   3. **EXPAND_DAY** - Expand each day with activities + meals (breakfast/lunch/dinner). User can modify each day before proceeding.
+   4. **REVIEW** - All days expanded. User can edit any day or provide general feedback.
+   5. **FINALIZE** - Enrich with Places API (coordinates, ratings, place_ids). Generate final itinerary with links.
 
 ### API Endpoints
 
+**Session-Based Workflow (New):**
+
 | Endpoint | Method | Purpose |
 |----------|--------|---------|
-| `/api/generate-plan` | POST | Create initial travel plan |
+| `/api/start-session` | POST | Initialize session, begin INFO_GATHERING |
+| `/api/chat` | POST | Chat in INFO_GATHERING or REVIEW states |
+| `/api/generate-skeleton` | POST | Generate day themes after info complete |
+| `/api/expand-day` | POST | Expand a specific day with activities + meals |
+| `/api/modify-day` | POST | Modify an already-expanded day |
+| `/api/start-review` | POST | Transition to REVIEW state |
+| `/api/finalize` | POST | Enrich with Places API, generate final plan |
+| `/api/session/:sessionId` | GET | Get current session state |
+
+**Legacy Endpoints (Backward Compatible):**
+
+| Endpoint | Method | Purpose |
+|----------|--------|---------|
+| `/api/generate-plan` | POST | Create initial travel plan (one-shot) |
 | `/api/modify-plan` | POST | Refine plan via chat conversation |
-| `/api/autocomplete` | GET | Location suggestions |
 | `/health` | GET | Health check |
 
 ## Environment Variables

@@ -1,30 +1,64 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { View, ScrollView, StyleSheet, Alert, Linking, TouchableOpacity } from 'react-native';
-import { Text, Title, Paragraph, List, Button, Divider, TextInput as PaperInput, ActivityIndicator } from 'react-native-paper';
-import { generatePlan, modifyPlan } from '../services/api';
+import { View, ScrollView, StyleSheet, Alert } from 'react-native';
+import { Text, Title, Paragraph, Button, TextInput as PaperInput, ActivityIndicator, Chip } from 'react-native-paper';
+import {
+    startSession,
+    chat,
+    generateSkeleton,
+    suggestDay,
+    confirmDaySelections,
+    expandDay,
+    modifyDay,
+    startReview,
+    finalize
+} from '../services/api';
 import MapComponent from '../components/MapComponent';
 import DetailedItineraryView from '../components/DetailedItineraryView';
+import SkeletonView from '../components/SkeletonView';
 
-const INITIAL_PLAN = {
-    plan_type: "planning",
-    summary: "Hello! I'm your AI travel assistant. To create your perfect trip, please tell me:\n\n1. Where would you like to go?\n2. What are your travel dates?\n3. How many days is your trip?\n4. What are your interests? (e.g., history, food, adventure, art, relaxation)\n\nShare as much as you'd like and we'll build your ideal itinerary together!",
-    itinerary: [],
-    destination: null,
-    start_date: null,
-    end_date: null,
-    duration_days: 0
+// Workflow states
+const WORKFLOW_STATES = {
+    INFO_GATHERING: 'INFO_GATHERING',
+    SKELETON: 'SKELETON',
+    EXPAND_DAY: 'EXPAND_DAY',
+    REVIEW: 'REVIEW',
+    FINALIZE: 'FINALIZE'
 };
 
 const ItineraryScreen = ({ route, navigation }) => {
-    const [plan, setPlan] = useState(route?.params?.plan || INITIAL_PLAN);
+    // Session state
+    const [sessionId, setSessionId] = useState(null);
+    const [workflowState, setWorkflowState] = useState(WORKFLOW_STATES.INFO_GATHERING);
+
+    // Trip data
+    const [tripInfo, setTripInfo] = useState(null);
+    const [skeleton, setSkeleton] = useState(null);
+    const [expandedDays, setExpandedDays] = useState({});
+    const [currentExpandDay, setCurrentExpandDay] = useState(null);
+    const [finalPlan, setFinalPlan] = useState(null);
+
+    // UI state
     const [loading, setLoading] = useState(false);
-    const [initializing, setInitializing] = useState(!route?.params?.plan);
+    const [initializing, setInitializing] = useState(true);
     const [chatInput, setChatInput] = useState('');
     const [chatHistory, setChatHistory] = useState([]);
-    const [isFinalized, setIsFinalized] = useState(false);
+    const [canProceed, setCanProceed] = useState(false);
+    const [canReview, setCanReview] = useState(false);
+
+    // Suggestions state (for day planning)
+    const [suggestions, setSuggestions] = useState(null);
+    const [selections, setSelections] = useState({
+        breakfast: null,
+        morningActivities: [],
+        lunch: null,
+        afternoonActivities: [],
+        dinner: null,
+        eveningActivities: []
+    });
+
     const chatScrollRef = useRef(null);
 
-    // Auto-scroll to bottom when chat history changes
+    // Auto-scroll chat
     useEffect(() => {
         if (chatScrollRef.current) {
             setTimeout(() => {
@@ -33,108 +67,623 @@ const ItineraryScreen = ({ route, navigation }) => {
         }
     }, [chatHistory]);
 
-    // Update finalized state when plan changes
+    // Initialize session on mount
     useEffect(() => {
-        setIsFinalized(plan.plan_type === 'finalized');
-    }, [plan.plan_type]);
-
-    // Fetch initial plan on mount if not passed via route
-    useEffect(() => {
-        const initializePlan = async () => {
-            if (!route?.params?.plan) {
-                try {
-                    const response = await generatePlan({
-                        destination: null,
-                        start_date: null,
-                        end_date: null,
-                        interest_categories: [],
-                        activity_level: 'moderate'
-                    });
-                    if (response.success && response.plan) {
-                        setPlan(response.plan);
-                        if (response.plan.summary) {
-                            setChatHistory([{ role: 'assistant', content: response.plan.summary }]);
-                        }
-                    }
-                } catch (error) {
-                    console.error('Failed to initialize plan:', error);
-                } finally {
-                    setInitializing(false);
-                }
-            } else {
-                if (plan.summary) {
-                    setChatHistory([{ role: 'assistant', content: plan.summary }]);
-                }
-                setInitializing(false);
-            }
-        };
-        initializePlan();
+        initializeSession();
     }, []);
 
-    const handleModify = async () => {
-        if (!chatInput.trim()) return;
+    const initializeSession = async () => {
+        try {
+            const response = await startSession();
+            if (response.success) {
+                setSessionId(response.sessionId);
+                setWorkflowState(response.workflowState);
+                setChatHistory([{ role: 'assistant', content: response.message }]);
+            }
+        } catch (error) {
+            console.error('Failed to start session:', error);
+            Alert.alert('Error', 'Failed to start planning session. Please try again.');
+        } finally {
+            setInitializing(false);
+        }
+    };
+
+    // Handle chat messages (INFO_GATHERING and REVIEW states)
+    const handleChat = async () => {
+        if (!chatInput.trim() || !sessionId) return;
 
         const userMessage = chatInput;
         setChatInput('');
         setChatHistory(prev => [...prev, { role: 'user', content: userMessage }]);
-
         setLoading(true);
+
         try {
-            const payload = {
-                current_plan: plan,
-                user_message: userMessage,
-                conversation_history: chatHistory
-            };
+            // Use different endpoints based on workflow state
+            if (workflowState === WORKFLOW_STATES.EXPAND_DAY && currentExpandDay) {
+                // Try to detect if user is referencing a specific day number (e.g., "Day 1")
+                const dayMatch = userMessage.match(/day\s*(\d+)/i);
+                const mentionedDay = dayMatch ? parseInt(dayMatch[1]) : null;
 
-            const response = await modifyPlan(payload);
+                // If user mentions a day that's already expanded, modify that day
+                // Otherwise, operate on the current day
+                const targetDay = (mentionedDay && expandedDays[mentionedDay]) ? mentionedDay : currentExpandDay;
 
-            if (response.success && response.plan) {
-                setPlan(response.plan);
-                setChatHistory(prev => [
-                    ...prev,
-                    { role: 'assistant', content: response.message || response.plan.summary || 'Updated!' }
-                ]);
+                if (expandedDays[targetDay]) {
+                    // Day is already expanded, modify it
+                    const response = await modifyDay(sessionId, targetDay, userMessage);
+                    if (response.success) {
+                        setChatHistory(prev => [...prev, { role: 'assistant', content: response.message }]);
+                        if (response.expandedDay) {
+                            setExpandedDays(response.allExpandedDays || { ...expandedDays, [targetDay]: response.expandedDay });
+                        }
+                    }
+                } else {
+                    // Day not yet expanded - generate suggestions with user's context
+                    const response = await suggestDay(sessionId, currentExpandDay, userMessage);
+                    if (response.success) {
+                        setChatHistory(prev => [...prev, { role: 'assistant', content: response.message }]);
+                        setSuggestions(response.suggestions);
+                        // Reset selections when suggestions change
+                        setSelections({
+                            breakfast: null,
+                            morningActivities: [],
+                            lunch: null,
+                            afternoonActivities: [],
+                            dinner: null,
+                            eveningActivities: []
+                        });
+                    }
+                }
             } else {
-                setChatHistory(prev => [...prev, { role: 'assistant', content: 'Sorry, something went wrong.' }]);
+                // INFO_GATHERING or REVIEW
+                const response = await chat(sessionId, userMessage);
+                if (response.success) {
+                    setChatHistory(prev => [...prev, { role: 'assistant', content: response.message }]);
+                    if (response.tripInfo) {
+                        setTripInfo(response.tripInfo);
+                    }
+                    if (response.canProceed !== undefined) {
+                        setCanProceed(response.canProceed);
+                    }
+                    // Sync skeleton and expandedDays from server (handles destination change clearing)
+                    if (response.skeleton !== undefined) {
+                        setSkeleton(response.skeleton);
+                        // If skeleton is cleared, also reset related state
+                        if (response.skeleton === null) {
+                            setCurrentExpandDay(null);
+                            setFinalPlan(null);
+                            setCanReview(false);
+                            setSuggestions(null);
+                        }
+                    }
+                    if (response.expandedDays !== undefined) {
+                        setExpandedDays(response.expandedDays);
+                    }
+                }
             }
         } catch (error) {
-            console.error(error);
-            setChatHistory(prev => [...prev, { role: 'assistant', content: 'Error connecting to server.' }]);
+            console.error('Chat error:', error);
+            setChatHistory(prev => [...prev, { role: 'assistant', content: 'Sorry, something went wrong. Please try again.' }]);
         } finally {
             setLoading(false);
         }
     };
 
-    const handleFinalize = async () => {
-        if (!plan.itinerary || plan.itinerary.length === 0) {
-            Alert.alert("Not Ready", "Please complete your itinerary first by chatting with the assistant.");
-            return;
-        }
-
+    // Generate skeleton itinerary
+    const handleGenerateSkeleton = async () => {
+        if (!sessionId) return;
         setLoading(true);
-        try {
-            const response = await modifyPlan({
-                current_plan: plan,
-                user_message: "",
-                conversation_history: chatHistory,
-                finalize: true
-            });
 
-            if (response.success && response.plan) {
-                setPlan(response.plan);
-                setChatHistory(prev => [
-                    ...prev,
-                    { role: 'assistant', content: "Your itinerary is finalized! Scroll down to see the detailed day-by-day plan with all the information you need." }
-                ]);
-            } else {
-                Alert.alert("Error", "Failed to finalize itinerary. Please try again.");
+        try {
+            const response = await generateSkeleton(sessionId);
+            if (response.success) {
+                setWorkflowState(WORKFLOW_STATES.SKELETON);
+                setSkeleton(response.skeleton);
+                setTripInfo(response.tripInfo);
+                setChatHistory(prev => [...prev, { role: 'assistant', content: response.message }]);
+                setCurrentExpandDay(response.nextDayToExpand || 1);
             }
         } catch (error) {
-            console.error(error);
-            Alert.alert("Error", "Failed to finalize itinerary. Please try again.");
+            console.error('Generate skeleton error:', error);
+            Alert.alert('Error', 'Failed to generate trip overview. Please try again.');
         } finally {
             setLoading(false);
         }
+    };
+
+    // Get suggestions for a day (first step of expanding)
+    const handleSuggestDay = async (dayNumber) => {
+        if (!sessionId) return;
+        setLoading(true);
+        setCurrentExpandDay(dayNumber);
+        // Reset selections for new day
+        setSelections({
+            breakfast: null,
+            morningActivities: [],
+            lunch: null,
+            afternoonActivities: [],
+            dinner: null,
+            eveningActivities: []
+        });
+
+        try {
+            const response = await suggestDay(sessionId, dayNumber);
+            if (response.success) {
+                setWorkflowState(WORKFLOW_STATES.EXPAND_DAY);
+                setSuggestions(response.suggestions);
+                setChatHistory(prev => [...prev, { role: 'assistant', content: response.message }]);
+            }
+        } catch (error) {
+            console.error('Suggest day error:', error);
+            Alert.alert('Error', 'Failed to get suggestions. Please try again.');
+        } finally {
+            setLoading(false);
+        }
+    };
+
+    // Toggle selection for a meal option
+    const toggleMealSelection = (mealType, optionId) => {
+        setSelections(prev => ({
+            ...prev,
+            [mealType]: prev[mealType] === optionId ? null : optionId
+        }));
+    };
+
+    // Toggle selection for an activity option
+    const toggleActivitySelection = (slotType, optionId) => {
+        setSelections(prev => {
+            const current = prev[slotType] || [];
+            const isSelected = current.includes(optionId);
+            return {
+                ...prev,
+                [slotType]: isSelected
+                    ? current.filter(id => id !== optionId)
+                    : [...current, optionId]
+            };
+        });
+    };
+
+    // Confirm selections and create expanded day
+    const handleConfirmSelections = async () => {
+        if (!sessionId || !currentExpandDay) return;
+        setLoading(true);
+
+        try {
+            const response = await confirmDaySelections(sessionId, currentExpandDay, selections);
+            if (response.success) {
+                setExpandedDays(response.allExpandedDays || { ...expandedDays, [currentExpandDay]: response.expandedDay });
+                setChatHistory(prev => [...prev, { role: 'assistant', content: response.message }]);
+                setCurrentExpandDay(response.nextDayToExpand || currentExpandDay);
+                setCanReview(response.canReview || false);
+                // Clear suggestions after confirming
+                setSuggestions(null);
+            }
+        } catch (error) {
+            console.error('Confirm selections error:', error);
+            Alert.alert('Error', 'Failed to confirm selections. Please try again.');
+        } finally {
+            setLoading(false);
+        }
+    };
+
+    // Legacy expand day (without suggestions - used for modifications)
+    const handleExpandDay = async (dayNumber) => {
+        if (!sessionId) return;
+        setLoading(true);
+        setCurrentExpandDay(dayNumber);
+
+        try {
+            const response = await expandDay(sessionId, dayNumber);
+            if (response.success) {
+                setWorkflowState(WORKFLOW_STATES.EXPAND_DAY);
+                setExpandedDays(response.allExpandedDays || { ...expandedDays, [dayNumber]: response.expandedDay });
+                setChatHistory(prev => [...prev, { role: 'assistant', content: response.message }]);
+                setCurrentExpandDay(response.nextDayToExpand || dayNumber);
+                setCanReview(response.canReview || false);
+            }
+        } catch (error) {
+            console.error('Expand day error:', error);
+            Alert.alert('Error', 'Failed to expand day. Please try again.');
+        } finally {
+            setLoading(false);
+        }
+    };
+
+    // Start review phase
+    const handleStartReview = async () => {
+        if (!sessionId) return;
+        setLoading(true);
+
+        try {
+            const response = await startReview(sessionId);
+            if (response.success) {
+                setWorkflowState(WORKFLOW_STATES.REVIEW);
+                setChatHistory(prev => [...prev, { role: 'assistant', content: response.message }]);
+                if (response.expandedDays) {
+                    setExpandedDays(response.expandedDays);
+                }
+            }
+        } catch (error) {
+            console.error('Start review error:', error);
+            Alert.alert('Error', 'Failed to start review. Please try again.');
+        } finally {
+            setLoading(false);
+        }
+    };
+
+    // Finalize the itinerary
+    const handleFinalize = async () => {
+        if (!sessionId) return;
+        setLoading(true);
+
+        try {
+            const response = await finalize(sessionId);
+            if (response.success) {
+                setWorkflowState(WORKFLOW_STATES.FINALIZE);
+                setFinalPlan(response.finalPlan);
+                setChatHistory(prev => [...prev, { role: 'assistant', content: response.message }]);
+            }
+        } catch (error) {
+            console.error('Finalize error:', error);
+            Alert.alert('Error', 'Failed to finalize itinerary. Please try again.');
+        } finally {
+            setLoading(false);
+        }
+    };
+
+    // Helper to validate and normalize coordinates
+    const getValidCoordinates = (coords) => {
+        if (!coords) return null;
+        const lat = typeof coords.lat === 'string' ? parseFloat(coords.lat) : coords.lat;
+        const lng = typeof coords.lng === 'string' ? parseFloat(coords.lng) : coords.lng;
+        if (typeof lat === 'number' && typeof lng === 'number' && !isNaN(lat) && !isNaN(lng)) {
+            return { lat, lng };
+        }
+        return null;
+    };
+
+    // Build preview from selected suggestions (for real-time map updates)
+    const getSelectedSuggestionsPreview = () => {
+        if (!suggestions || !currentExpandDay) return null;
+
+        const getSelectedOption = (options, selectedId) => {
+            if (!options || !selectedId) return null;
+            return options.find(opt => opt.id === selectedId);
+        };
+
+        const getSelectedOptions = (options, selectedIds) => {
+            if (!options || !selectedIds || selectedIds.length === 0) return [];
+            return options.filter(opt => selectedIds.includes(opt.id));
+        };
+
+        // Helper to create map entry with validated coordinates
+        const createMapEntry = (item, type) => {
+            const coords = getValidCoordinates(item?.coordinates);
+            if (!coords) return null;
+            return { name: item.name, type, coordinates: coords };
+        };
+
+        // Build activities from selections
+        const selectedBreakfast = getSelectedOption(suggestions.breakfast, selections.breakfast);
+        const selectedMorning = getSelectedOptions(suggestions.morningActivities, selections.morningActivities);
+        const selectedLunch = getSelectedOption(suggestions.lunch, selections.lunch);
+        const selectedAfternoon = getSelectedOptions(suggestions.afternoonActivities, selections.afternoonActivities);
+        const selectedDinner = getSelectedOption(suggestions.dinner, selections.dinner);
+        const selectedEvening = getSelectedOptions(suggestions.eveningActivities, selections.eveningActivities);
+
+        // Convert to map format with validated coordinates
+        const morning = [
+            createMapEntry(selectedBreakfast, 'restaurant'),
+            ...selectedMorning.map(a => createMapEntry(a, a.type || 'attraction'))
+        ].filter(Boolean);
+
+        const afternoon = [
+            createMapEntry(selectedLunch, 'restaurant'),
+            ...selectedAfternoon.map(a => createMapEntry(a, a.type || 'attraction'))
+        ].filter(Boolean);
+
+        const evening = [
+            createMapEntry(selectedDinner, 'restaurant'),
+            ...selectedEvening.map(a => createMapEntry(a, a.type || 'attraction'))
+        ].filter(Boolean);
+
+        // Only return if there are any selected items with coordinates
+        if (morning.length === 0 && afternoon.length === 0 && evening.length === 0) {
+            return null;
+        }
+
+        return {
+            day_number: currentExpandDay,
+            date: suggestions.date,
+            morning,
+            afternoon,
+            evening
+        };
+    };
+
+    // Convert expanded days to itinerary format for map
+    const getItineraryForMap = () => {
+        // Helper to validate and format activity for map
+        const formatActivity = (activity) => {
+            if (!activity) return null;
+            const coords = getValidCoordinates(activity.coordinates);
+            if (!coords) return null;
+            return {
+                name: activity.name,
+                type: activity.type || 'attraction',
+                coordinates: coords,
+                time: activity.time || activity.timeSlot
+            };
+        };
+
+        if (finalPlan?.itinerary) {
+            // Transform finalPlan.itinerary to include meals merged into time slots
+            return finalPlan.itinerary.map(day => {
+                const morningWithBreakfast = [
+                    formatActivity(day.breakfast),
+                    ...(day.morning || []).map(formatActivity)
+                ].filter(Boolean);
+
+                const afternoonWithLunch = [
+                    formatActivity(day.lunch),
+                    ...(day.afternoon || []).map(formatActivity)
+                ].filter(Boolean);
+
+                const eveningWithDinner = [
+                    formatActivity(day.dinner),
+                    ...(day.evening || []).map(formatActivity)
+                ].filter(Boolean);
+
+                return {
+                    day_number: day.day_number || day.dayNumber,
+                    date: day.date,
+                    morning: morningWithBreakfast,
+                    afternoon: afternoonWithLunch,
+                    evening: eveningWithDinner
+                };
+            });
+        }
+
+        // Convert expandedDays to array format, including meals as activities for map display
+        const expandedItinerary = Object.values(expandedDays)
+            .sort((a, b) => a.dayNumber - b.dayNumber)
+            .map(day => {
+                // Include meals and activities with valid coordinates
+                const morningWithBreakfast = [
+                    formatActivity(day.breakfast),
+                    ...(day.morning || []).map(formatActivity)
+                ].filter(Boolean);
+
+                const afternoonWithLunch = [
+                    formatActivity(day.lunch),
+                    ...(day.afternoon || []).map(formatActivity)
+                ].filter(Boolean);
+
+                const eveningWithDinner = [
+                    formatActivity(day.dinner),
+                    ...(day.evening || []).map(formatActivity)
+                ].filter(Boolean);
+
+                return {
+                    day_number: day.dayNumber,
+                    date: day.date,
+                    morning: morningWithBreakfast,
+                    afternoon: afternoonWithLunch,
+                    evening: eveningWithDinner
+                };
+            });
+
+        // Add preview from selected suggestions (if any)
+        const suggestionsPreview = getSelectedSuggestionsPreview();
+        if (suggestionsPreview) {
+            // Check if this day already exists in expanded (shouldn't happen, but be safe)
+            const existingDayIndex = expandedItinerary.findIndex(d => d.day_number === suggestionsPreview.day_number);
+            if (existingDayIndex === -1) {
+                expandedItinerary.push(suggestionsPreview);
+                expandedItinerary.sort((a, b) => a.day_number - b.day_number);
+            }
+        }
+
+        return expandedItinerary;
+    };
+
+    // Get workflow state label
+    const getStateLabel = () => {
+        switch (workflowState) {
+            case WORKFLOW_STATES.INFO_GATHERING: return 'Gathering Info';
+            case WORKFLOW_STATES.SKELETON: return 'Trip Overview';
+            case WORKFLOW_STATES.EXPAND_DAY: return `Planning Day ${currentExpandDay || ''}`;
+            case WORKFLOW_STATES.REVIEW: return 'Review';
+            case WORKFLOW_STATES.FINALIZE: return 'Finalized';
+            default: return '';
+        }
+    };
+
+    // Render action button based on state
+    const renderActionButton = () => {
+        switch (workflowState) {
+            case WORKFLOW_STATES.INFO_GATHERING:
+                return canProceed ? (
+                    <Button
+                        mode="contained"
+                        onPress={handleGenerateSkeleton}
+                        loading={loading}
+                        disabled={loading}
+                        style={styles.actionButton}
+                    >
+                        Generate Trip Overview
+                    </Button>
+                ) : null;
+
+            case WORKFLOW_STATES.SKELETON:
+                return (
+                    <Button
+                        mode="contained"
+                        onPress={() => handleSuggestDay(1)}
+                        loading={loading}
+                        disabled={loading}
+                        style={styles.actionButton}
+                    >
+                        Start Planning Day 1
+                    </Button>
+                );
+
+            case WORKFLOW_STATES.EXPAND_DAY:
+                const totalDays = skeleton?.days?.length || 0;
+                const expandedCount = Object.keys(expandedDays).length;
+
+                // If we have suggestions, show confirm button
+                if (suggestions) {
+                    return (
+                        <Button
+                            mode="contained"
+                            onPress={handleConfirmSelections}
+                            loading={loading}
+                            disabled={loading}
+                            style={[styles.actionButton, styles.confirmButton]}
+                        >
+                            Confirm Selections for Day {currentExpandDay}
+                        </Button>
+                    );
+                }
+
+                if (expandedCount >= totalDays) {
+                    return (
+                        <Button
+                            mode="contained"
+                            onPress={handleStartReview}
+                            loading={loading}
+                            disabled={loading}
+                            style={styles.actionButton}
+                        >
+                            Review All Days
+                        </Button>
+                    );
+                } else {
+                    // Find the next unexpanded day
+                    const nextUnexpandedDay = skeleton?.days?.find(d => !expandedDays[d.dayNumber]);
+                    if (nextUnexpandedDay) {
+                        return (
+                            <Button
+                                mode="contained"
+                                onPress={() => handleSuggestDay(nextUnexpandedDay.dayNumber)}
+                                loading={loading}
+                                disabled={loading}
+                                style={styles.actionButton}
+                            >
+                                Continue to Day {nextUnexpandedDay.dayNumber}
+                            </Button>
+                        );
+                    }
+                }
+                return null;
+
+            case WORKFLOW_STATES.REVIEW:
+                return (
+                    <Button
+                        mode="contained"
+                        onPress={handleFinalize}
+                        loading={loading}
+                        disabled={loading}
+                        style={[styles.actionButton, styles.finalizeButton]}
+                    >
+                        Finalize Itinerary
+                    </Button>
+                );
+
+            default:
+                return null;
+        }
+    };
+
+    // Render a single option card
+    const renderOptionCard = (option, isSelected, onPress, type = 'activity') => {
+        const icon = type === 'meal' ? '🍽️' : '📍';
+        return (
+            <View
+                key={option.id}
+                style={[
+                    styles.optionCard,
+                    isSelected && styles.optionCardSelected
+                ]}
+            >
+                <View style={styles.optionHeader}>
+                    <Text style={styles.optionIcon}>{icon}</Text>
+                    <Text style={[styles.optionName, isSelected && styles.optionNameSelected]}>
+                        {option.name}
+                    </Text>
+                </View>
+                <Text style={styles.optionDescription}>{option.description}</Text>
+                <View style={styles.optionMeta}>
+                    {option.cuisine && <Text style={styles.optionMetaText}>{option.cuisine}</Text>}
+                    {option.type && <Text style={styles.optionMetaText}>{option.type}</Text>}
+                    {option.priceRange && <Text style={styles.optionMetaText}>{option.priceRange}</Text>}
+                    {option.estimatedDuration && <Text style={styles.optionMetaText}>{option.estimatedDuration}</Text>}
+                    {option.estimatedCost != null && <Text style={styles.optionMetaText}>${option.estimatedCost}</Text>}
+                </View>
+                <Button
+                    mode={isSelected ? "contained" : "outlined"}
+                    onPress={onPress}
+                    compact
+                    style={styles.selectButton}
+                >
+                    {isSelected ? 'Selected' : 'Select'}
+                </Button>
+            </View>
+        );
+    };
+
+    // Render suggestions section
+    const renderSuggestions = () => {
+        if (!suggestions) return null;
+
+        const sections = [
+            { key: 'breakfast', label: '🌅 Breakfast Options', options: suggestions.breakfast, type: 'meal' },
+            { key: 'morningActivities', label: '☀️ Morning Activities', options: suggestions.morningActivities, type: 'activity' },
+            { key: 'lunch', label: '🍽️ Lunch Options', options: suggestions.lunch, type: 'meal' },
+            { key: 'afternoonActivities', label: '🌤️ Afternoon Activities', options: suggestions.afternoonActivities, type: 'activity' },
+            { key: 'dinner', label: '🌙 Dinner Options', options: suggestions.dinner, type: 'meal' },
+            { key: 'eveningActivities', label: '✨ Evening Activities', options: suggestions.eveningActivities, type: 'activity' }
+        ];
+
+        return (
+            <View style={styles.suggestionsContainer}>
+                <Text style={styles.suggestionsTitle}>
+                    Day {suggestions.dayNumber}: {suggestions.theme}
+                </Text>
+                <Text style={styles.suggestionsSubtitle}>
+                    Select your preferences for each time slot:
+                </Text>
+
+                {sections.map(section => {
+                    if (!section.options || section.options.length === 0) return null;
+
+                    const isMeal = section.type === 'meal';
+
+                    return (
+                        <View key={section.key} style={styles.suggestionSection}>
+                            <Text style={styles.sectionLabel}>{section.label}</Text>
+                            <View style={styles.optionsRow}>
+                                {section.options.map(option => {
+                                    const isSelected = isMeal
+                                        ? selections[section.key] === option.id
+                                        : (selections[section.key] || []).includes(option.id);
+
+                                    return renderOptionCard(
+                                        option,
+                                        isSelected,
+                                        () => isMeal
+                                            ? toggleMealSelection(section.key, option.id)
+                                            : toggleActivitySelection(section.key, option.id),
+                                        section.type
+                                    );
+                                })}
+                            </View>
+                        </View>
+                    );
+                })}
+            </View>
+        );
     };
 
     if (initializing) {
@@ -146,118 +695,103 @@ const ItineraryScreen = ({ route, navigation }) => {
         );
     }
 
+    const itineraryForMap = getItineraryForMap();
+    const isFinalized = workflowState === WORKFLOW_STATES.FINALIZE;
+
     return (
         <View style={styles.container}>
             <View style={styles.mainContent}>
-                {/* Left Panel: Map + Finalize Button + Detailed Itinerary */}
+                {/* Left Panel: Map + Itinerary View */}
                 <ScrollView style={styles.leftPanel} contentContainerStyle={styles.leftPanelContent}>
                     <View style={styles.mapContainer}>
-                        {plan.itinerary && <MapComponent itinerary={plan.itinerary} />}
+                        <MapComponent itinerary={itineraryForMap} destination={tripInfo?.destination} />
                     </View>
 
-                    {/* Finalize Button - below map, only when not finalized and has itinerary */}
-                    {!isFinalized && plan.itinerary && plan.itinerary.length > 0 && (
-                        <Button
-                            mode="contained"
-                            onPress={handleFinalize}
-                            loading={loading}
-                            disabled={loading}
-                            style={styles.finalizeButton}
-                        >
-                            Finalize Itinerary
-                        </Button>
+                    {/* Skeleton View - SKELETON and EXPAND_DAY states */}
+                    {(workflowState === WORKFLOW_STATES.SKELETON ||
+                      workflowState === WORKFLOW_STATES.EXPAND_DAY ||
+                      workflowState === WORKFLOW_STATES.REVIEW) &&
+                     skeleton && !isFinalized && (
+                        <SkeletonView
+                            skeleton={skeleton}
+                            tripInfo={tripInfo}
+                            expandedDays={expandedDays}
+                            currentExpandDay={currentExpandDay}
+                            onExpandDay={handleSuggestDay}
+                        />
                     )}
 
-                    {/* Detailed Itinerary View - only when finalized */}
-                    {isFinalized && plan.itinerary && plan.itinerary.length > 0 && (
-                        <DetailedItineraryView itinerary={plan.itinerary} />
+                    {/* Detailed Itinerary View - FINALIZE state */}
+                    {isFinalized && finalPlan?.itinerary && (
+                        <DetailedItineraryView itinerary={finalPlan.itinerary} />
                     )}
                 </ScrollView>
 
                 {/* Right Panel: Chat */}
                 <View style={styles.chatPanel}>
-                    {/* Header - fixed at top */}
+                    {/* Header */}
                     <View style={styles.chatHeader}>
-                        <Title style={styles.headerTitle}>{plan.destination || 'Planning Your Trip'}</Title>
-                        {plan.start_date && plan.end_date ? (
-                            <Paragraph>{plan.start_date} - {plan.end_date}</Paragraph>
-                        ) : (
-                            <Paragraph>Dates to be decided</Paragraph>
+                        <Title style={styles.headerTitle}>
+                            {tripInfo?.destination || 'Planning Your Trip'}
+                        </Title>
+                        {tripInfo?.startDate && tripInfo?.endDate && (
+                            <Paragraph>{tripInfo.startDate} - {tripInfo.endDate}</Paragraph>
                         )}
-                        {isFinalized && (
-                            <Text style={styles.finalizedBadge}>Finalized</Text>
-                        )}
+                        <Chip style={styles.stateChip} textStyle={styles.stateChipText}>
+                            {getStateLabel()}
+                        </Chip>
                     </View>
 
-                    {/* Scrollable Chat Content */}
+                    {/* Chat Messages */}
                     <ScrollView
                         ref={chatScrollRef}
                         style={styles.chatScroll}
                         contentContainerStyle={styles.chatContent}
                     >
-                        {/* Chat History */}
                         <View style={styles.conversation}>
                             {chatHistory.map((msg, idx) => (
-                                <View key={idx} style={[styles.messageBubble, msg.role === 'user' ? styles.userBubble : styles.assistantBubble]}>
-                                    <Text style={msg.role === 'user' ? styles.userText : styles.assistantText}>{msg.content}</Text>
+                                <View
+                                    key={idx}
+                                    style={[
+                                        styles.messageBubble,
+                                        msg.role === 'user' ? styles.userBubble : styles.assistantBubble
+                                    ]}
+                                >
+                                    <Text style={msg.role === 'user' ? styles.userText : styles.assistantText}>
+                                        {msg.content}
+                                    </Text>
                                 </View>
                             ))}
                             {loading && <ActivityIndicator style={{ marginTop: 10 }} />}
                         </View>
 
-                        {/* Draft Itinerary Accordion - only when not finalized */}
-                        {!isFinalized && plan.itinerary && plan.itinerary.length > 0 && (
-                            <>
-                                <Divider style={styles.divider} />
-                                <Title style={styles.sectionTitle}>Draft Itinerary</Title>
-                                {plan.itinerary.map((day, index) => (
-                                    <List.Accordion
-                                        key={index}
-                                        title={`Day ${day.day_number}: ${day.date}`}
-                                        left={props => <List.Icon {...props} icon="calendar" />}
-                                        style={styles.accordion}
-                                    >
-                                        <View style={styles.dayContent}>
-                                            {['morning', 'afternoon', 'evening'].map(slot => (
-                                                <View key={slot}>
-                                                    <Text style={styles.timeSlot}>{slot.charAt(0).toUpperCase() + slot.slice(1)}</Text>
-                                                    {day[slot]?.map((act, i) => (
-                                                        act.place_id ? (
-                                                            <TouchableOpacity
-                                                                key={`${slot}-${i}`}
-                                                                onPress={() => Linking.openURL(`https://www.google.com/maps/place/?q=place_id:${act.place_id}`)}
-                                                            >
-                                                                <Paragraph style={styles.placeLink}>• {act.name}</Paragraph>
-                                                            </TouchableOpacity>
-                                                        ) : (
-                                                            <Paragraph key={`${slot}-${i}`}>• {act.name}</Paragraph>
-                                                        )
-                                                    ))}
-                                                    <Divider style={styles.divider} />
-                                                </View>
-                                            ))}
-                                        </View>
-                                    </List.Accordion>
-                                ))}
-                            </>
-                        )}
+                        {/* Suggestions UI */}
+                        {renderSuggestions()}
+
+                        {/* Action Button */}
+                        {renderActionButton()}
                     </ScrollView>
 
-                    {/* Chat Input - fixed at bottom */}
+                    {/* Chat Input */}
                     <View style={styles.inputArea}>
                         <PaperInput
                             mode="outlined"
                             value={chatInput}
                             onChangeText={setChatInput}
-                            placeholder="Type your message..."
+                            placeholder={
+                                workflowState === WORKFLOW_STATES.EXPAND_DAY
+                                    ? "Suggest changes for this day..."
+                                    : "Type your message..."
+                            }
                             style={styles.chatInput}
-                            onSubmitEditing={handleModify}
+                            onSubmitEditing={handleChat}
+                            disabled={loading || isFinalized}
                         />
                         <Button
                             mode="contained"
-                            onPress={handleModify}
+                            onPress={handleChat}
                             loading={loading}
-                            disabled={loading}
+                            disabled={loading || !chatInput.trim() || isFinalized}
                             style={styles.sendButton}
                         >
                             Send
@@ -273,9 +807,9 @@ const styles = StyleSheet.create({
     container: {
         flex: 1,
         backgroundColor: '#f0f2f5',
+        height: 'calc(100vh - 50px)',
+        maxHeight: 'calc(100vh - 50px)',
         overflow: 'hidden',
-        display: 'flex',
-        flexDirection: 'column',
     },
     loadingContainer: {
         flex: 1,
@@ -286,27 +820,33 @@ const styles = StyleSheet.create({
     mainContent: {
         flex: 1,
         flexDirection: 'row',
+        height: '100%',
         minHeight: 0,
         overflow: 'hidden',
     },
     leftPanel: {
-        flex: 0.6,
-        overflow: 'auto',
-        minHeight: 0,
+        width: '60%',
+        height: '100%',
+        overflowY: 'auto',
+        overflowX: 'hidden',
     },
     leftPanelContent: {
         flexGrow: 1,
+        paddingBottom: 20,
     },
     mapContainer: {
-        height: 600,
-        minHeight: 500,
+        height: 400,
+        minHeight: 300,
     },
     chatPanel: {
-        flex: 0.4,
+        width: '40%',
         backgroundColor: '#fff',
         borderLeftWidth: 1,
         borderLeftColor: '#e0e0e0',
-        position: 'relative',
+        display: 'flex',
+        flexDirection: 'column',
+        height: '100%',
+        minHeight: 0,
     },
     chatHeader: {
         padding: 15,
@@ -315,24 +855,31 @@ const styles = StyleSheet.create({
         borderBottomColor: '#e0e0e0',
         alignItems: 'center',
         backgroundColor: '#fff',
-        height: 80,
-    },
-    chatScroll: {
-        position: 'absolute',
-        top: 80,
-        bottom: 70,
-        left: 0,
-        right: 0,
-        overflow: 'auto',
-    },
-    chatContent: {
-        padding: 15,
-        paddingBottom: 20,
+        flexShrink: 0,
     },
     headerTitle: {
         fontSize: 22,
         fontWeight: 'bold',
         color: '#1a1a1a',
+    },
+    stateChip: {
+        marginTop: 8,
+        backgroundColor: '#1f77b4',
+    },
+    stateChipText: {
+        color: '#fff',
+        fontSize: 12,
+        fontWeight: 'bold',
+    },
+    chatScroll: {
+        flex: 1,
+        minHeight: 0,
+        overflowY: 'auto',
+        overflowX: 'hidden',
+    },
+    chatContent: {
+        padding: 15,
+        paddingBottom: 20,
     },
     conversation: {
         marginBottom: 20,
@@ -358,11 +905,7 @@ const styles = StyleSheet.create({
         color: '#1c1e21',
     },
     inputArea: {
-        position: 'absolute',
-        bottom: 0,
-        left: 0,
-        right: 0,
-        height: 70,
+        flexShrink: 0,
         padding: 15,
         borderTopWidth: 1,
         borderTopColor: '#e0e0e0',
@@ -378,47 +921,107 @@ const styles = StyleSheet.create({
     sendButton: {
         borderRadius: 20,
     },
-    finalizeButton: {
-        margin: 15,
+    actionButton: {
+        marginTop: 15,
+        marginBottom: 10,
         backgroundColor: '#1f77b4',
     },
-    finalizedBadge: {
+    finalizeButton: {
         backgroundColor: '#4CAF50',
-        color: '#fff',
-        paddingHorizontal: 12,
-        paddingVertical: 4,
-        borderRadius: 12,
-        fontSize: 12,
-        fontWeight: 'bold',
-        marginTop: 8,
-        overflow: 'hidden',
     },
-    sectionTitle: {
+    confirmButton: {
+        backgroundColor: '#2196F3',
+    },
+    // Suggestions styles
+    suggestionsContainer: {
+        marginTop: 15,
+        marginBottom: 10,
+        padding: 15,
+        backgroundColor: '#f8f9fa',
+        borderRadius: 12,
+        borderWidth: 1,
+        borderColor: '#e0e0e0',
+    },
+    suggestionsTitle: {
         fontSize: 18,
         fontWeight: 'bold',
-        marginTop: 20,
+        color: '#1a1a1a',
+        marginBottom: 5,
+    },
+    suggestionsSubtitle: {
+        fontSize: 14,
+        color: '#666',
+        marginBottom: 15,
+    },
+    suggestionSection: {
+        marginBottom: 20,
+    },
+    sectionLabel: {
+        fontSize: 16,
+        fontWeight: '600',
+        color: '#333',
         marginBottom: 10,
     },
-    accordion: {
-        backgroundColor: '#fafafa',
-        marginBottom: 2,
-        borderRadius: 8,
+    optionsRow: {
+        flexDirection: 'row',
+        flexWrap: 'wrap',
+        gap: 10,
     },
-    dayContent: {
-        padding: 15,
+    optionCard: {
+        flex: 1,
+        minWidth: 200,
+        maxWidth: '48%',
+        backgroundColor: '#fff',
+        borderRadius: 10,
+        padding: 12,
+        borderWidth: 2,
+        borderColor: '#e0e0e0',
+        marginBottom: 10,
     },
-    timeSlot: {
-        fontWeight: 'bold',
-        marginTop: 10,
-        marginBottom: 5,
+    optionCardSelected: {
+        borderColor: '#1f77b4',
+        backgroundColor: '#e3f2fd',
+    },
+    optionHeader: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        marginBottom: 6,
+    },
+    optionIcon: {
+        fontSize: 16,
+        marginRight: 6,
+    },
+    optionName: {
+        fontSize: 14,
+        fontWeight: '600',
+        color: '#333',
+        flex: 1,
+    },
+    optionNameSelected: {
         color: '#1f77b4',
     },
-    divider: {
-        marginVertical: 10,
+    optionDescription: {
+        fontSize: 12,
+        color: '#666',
+        marginBottom: 8,
+        lineHeight: 18,
     },
-    placeLink: {
-        color: '#1a73e8',
-        textDecorationLine: 'underline',
+    optionMeta: {
+        flexDirection: 'row',
+        flexWrap: 'wrap',
+        gap: 6,
+        marginBottom: 8,
+    },
+    optionMetaText: {
+        fontSize: 11,
+        color: '#888',
+        backgroundColor: '#f0f0f0',
+        paddingHorizontal: 6,
+        paddingVertical: 2,
+        borderRadius: 4,
+    },
+    selectButton: {
+        marginTop: 4,
     },
 });
 

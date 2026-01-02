@@ -42,4 +42,116 @@ export const getConfig = async () => {
     }
 }
 
+// ==================== NEW SESSION-BASED WORKFLOW API ====================
+
+// Start a new planning session
+export const startSession = async () => {
+    try {
+        const response = await api.post('/start-session');
+        return response.data;
+    } catch (error) {
+        console.error('Error starting session:', error);
+        throw error;
+    }
+};
+
+// Chat with the assistant (INFO_GATHERING and REVIEW states)
+export const chat = async (sessionId, message) => {
+    try {
+        const response = await api.post('/chat', { sessionId, message });
+        return response.data;
+    } catch (error) {
+        console.error('Error in chat:', error);
+        throw error;
+    }
+};
+
+// Generate skeleton itinerary (day themes)
+export const generateSkeleton = async (sessionId) => {
+    try {
+        const response = await api.post('/generate-skeleton', { sessionId });
+        return response.data;
+    } catch (error) {
+        console.error('Error generating skeleton:', error);
+        throw error;
+    }
+};
+
+// Get suggestions for a day's activities and meals
+export const suggestDay = async (sessionId, dayNumber, userMessage = '') => {
+    try {
+        const response = await api.post('/suggest-day', { sessionId, dayNumber, userMessage });
+        return response.data;
+    } catch (error) {
+        console.error('Error getting suggestions:', error);
+        throw error;
+    }
+};
+
+// Confirm user selections and create expanded day
+export const confirmDaySelections = async (sessionId, dayNumber, selections) => {
+    try {
+        const response = await api.post('/confirm-day-selections', { sessionId, dayNumber, selections });
+        return response.data;
+    } catch (error) {
+        console.error('Error confirming selections:', error);
+        throw error;
+    }
+};
+
+// Expand a specific day with activities
+export const expandDay = async (sessionId, dayNumber, userMessage = '') => {
+    try {
+        const response = await api.post('/expand-day', { sessionId, dayNumber, userMessage });
+        return response.data;
+    } catch (error) {
+        console.error('Error expanding day:', error);
+        throw error;
+    }
+};
+
+// Modify an already-expanded day
+export const modifyDay = async (sessionId, dayNumber, userMessage) => {
+    try {
+        const response = await api.post('/modify-day', { sessionId, dayNumber, userMessage });
+        return response.data;
+    } catch (error) {
+        console.error('Error modifying day:', error);
+        throw error;
+    }
+};
+
+// Start review phase
+export const startReview = async (sessionId) => {
+    try {
+        const response = await api.post('/start-review', { sessionId });
+        return response.data;
+    } catch (error) {
+        console.error('Error starting review:', error);
+        throw error;
+    }
+};
+
+// Finalize the itinerary
+export const finalize = async (sessionId) => {
+    try {
+        const response = await api.post('/finalize', { sessionId });
+        return response.data;
+    } catch (error) {
+        console.error('Error finalizing:', error);
+        throw error;
+    }
+};
+
+// Get session state
+export const getSession = async (sessionId) => {
+    try {
+        const response = await api.get(`/session/${sessionId}`);
+        return response.data;
+    } catch (error) {
+        console.error('Error getting session:', error);
+        throw error;
+    }
+};
+
 export default api;

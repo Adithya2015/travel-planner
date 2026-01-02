@@ -1,5 +1,115 @@
 const { z } = require('zod');
 
+// Workflow state enum
+const WorkflowStateSchema = z.enum([
+    'INFO_GATHERING',
+    'SKELETON',
+    'EXPAND_DAY',
+    'REVIEW',
+    'FINALIZE'
+]);
+
+// Trip info collected during INFO_GATHERING
+const TripInfoSchema = z.object({
+    destination: z.string().nullable(),
+    startDate: z.string().nullable(),
+    endDate: z.string().nullable(),
+    durationDays: z.number().nullable(),
+    interests: z.array(z.string()).default([]),
+    activityLevel: z.string().default('moderate'),
+    travelers: z.number().default(1),
+    budget: z.string().nullable()
+});
+
+// Skeleton day (day themes only, no activities)
+const SkeletonDaySchema = z.object({
+    dayNumber: z.number(),
+    date: z.string(),
+    theme: z.string(),
+    highlights: z.array(z.string())
+});
+
+const SkeletonItinerarySchema = z.object({
+    days: z.array(SkeletonDaySchema)
+});
+
+// Meal schema for restaurants
+const MealSchema = z.object({
+    name: z.string(),
+    type: z.enum(['breakfast', 'lunch', 'dinner']),
+    cuisine: z.string().optional().nullable(),
+    description: z.string().optional().nullable(),
+    estimatedCost: z.number().optional().nullable(),
+    timeSlot: z.string().optional().nullable(),
+    // Fields added during finalization
+    rating: z.number().optional().nullable(),
+    place_id: z.string().optional().nullable(),
+    coordinates: z.object({
+        lat: z.number(),
+        lng: z.number()
+    }).optional().nullable()
+});
+
+// Suggestion option for activity
+const ActivityOptionSchema = z.object({
+    id: z.string(),
+    name: z.string(),
+    type: z.string(),
+    description: z.string(),
+    estimatedDuration: z.string().optional().nullable(),
+    estimatedCost: z.number().optional().nullable()
+});
+
+// Suggestion option for meal/restaurant
+const MealOptionSchema = z.object({
+    id: z.string(),
+    name: z.string(),
+    cuisine: z.string(),
+    description: z.string(),
+    priceRange: z.string().optional().nullable(), // $, $$, $$$
+    estimatedCost: z.number().optional().nullable()
+});
+
+// Day suggestions with multiple options per slot
+const DaySuggestionsSchema = z.object({
+    dayNumber: z.number(),
+    date: z.string(),
+    theme: z.string(),
+    breakfast: z.array(MealOptionSchema).default([]),
+    morningActivities: z.array(ActivityOptionSchema).default([]),
+    lunch: z.array(MealOptionSchema).default([]),
+    afternoonActivities: z.array(ActivityOptionSchema).default([]),
+    dinner: z.array(MealOptionSchema).default([]),
+    eveningActivities: z.array(ActivityOptionSchema).default([])
+});
+
+// User selections from suggestions
+const DaySelectionsSchema = z.object({
+    dayNumber: z.number(),
+    breakfast: z.string().nullable(), // selected meal option id
+    morningActivities: z.array(z.string()).default([]), // selected activity option ids
+    lunch: z.string().nullable(),
+    afternoonActivities: z.array(z.string()).default([]),
+    dinner: z.string().nullable(),
+    eveningActivities: z.array(z.string()).default([]),
+    customRequests: z.string().optional().nullable() // additional user input
+});
+
+// Expanded day with full activities and meals
+const ExpandedDaySchema = z.object({
+    dayNumber: z.number(),
+    date: z.string(),
+    theme: z.string(),
+    breakfast: MealSchema.nullable().optional(),
+    morning: z.array(z.lazy(() => ActivitySchema)).default([]),
+    lunch: MealSchema.nullable().optional(),
+    afternoon: z.array(z.lazy(() => ActivitySchema)).default([]),
+    dinner: MealSchema.nullable().optional(),
+    evening: z.array(z.lazy(() => ActivitySchema)).default([]),
+    notes: z.string().optional().nullable()
+});
+
+// Original activity schema (kept for compatibility)
 const ActivitySchema = z.object({
     name: z.string(),
     type: z.string(),
@@ -55,6 +165,21 @@ const TravelRequestSchema = z.object({
 });
 
 module.exports = {
+    // Original schemas
     TravelPlanSchema,
-    TravelRequestSchema
+    TravelRequestSchema,
+    ActivitySchema,
+    DayItinerarySchema,
+    // New workflow schemas
+    WorkflowStateSchema,
+    TripInfoSchema,
+    SkeletonDaySchema,
+    SkeletonItinerarySchema,
+    MealSchema,
+    ExpandedDaySchema,
+    // Suggestion schemas
+    ActivityOptionSchema,
+    MealOptionSchema,
+    DaySuggestionsSchema,
+    DaySelectionsSchema
 };

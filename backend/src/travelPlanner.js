@@ -136,6 +136,138 @@ class TravelPlanner {
             destination: request.destination || llmData.destination || "To be decided",
         };
     }
+
+    /**
+     * Geocode activities in an expanded day for immediate map display
+     * Called during expand-day phase
+     */
+    async geocodeExpandedDay(expandedDay, destination) {
+        if (!expandedDay || !destination) {
+            return expandedDay;
+        }
+
+        // Geocode destination to get base coordinates
+        const destCoords = await this.geocoding.geocode(destination);
+        if (!destCoords) {
+            console.warn("Could not geocode destination:", destination);
+            return expandedDay;
+        }
+
+        // Helper to geocode a single place
+        const geocodePlace = async (name, type = 'tourist_attraction') => {
+            if (!name) return null;
+            try {
+                const placeData = await this.placesClient.enrichActivityWithPlaces(
+                    name,
+                    destCoords,
+                    type
+                );
+                if (placeData && placeData.location) {
+                    return {
+                        lat: placeData.location.lat,
+                        lng: placeData.location.lng
+                    };
+                }
+            } catch (err) {
+                console.warn(`Failed to geocode ${name}:`, err.message);
+            }
+            return null;
+        };
+
+        // Geocode meals (only if coordinates not already set)
+        for (const mealType of ['breakfast', 'lunch', 'dinner']) {
+            const meal = expandedDay[mealType];
+            if (meal && meal.name && !meal.coordinates?.lat) {
+                const coords = await geocodePlace(meal.name, 'restaurant');
+                if (coords) {
+                    meal.coordinates = coords;
+                }
+            }
+        }
+
+        // Geocode activities in each time slot (only if coordinates not already set)
+        for (const timeSlot of ['morning', 'afternoon', 'evening']) {
+            if (expandedDay[timeSlot] && Array.isArray(expandedDay[timeSlot])) {
+                for (const activity of expandedDay[timeSlot]) {
+                    if (activity.name && !activity.coordinates?.lat) {
+                        const placeType = activity.type === 'restaurant' ? 'restaurant' : 'tourist_attraction';
+                        const coords = await geocodePlace(activity.name, placeType);
+                        if (coords) {
+                            activity.coordinates = coords;
+                        }
+                    }
+                }
+            }
+        }
+
+        return expandedDay;
+    }
+
+    /**
+     * Enrich the final plan with Places API data
+     * Used by the new session-based workflow during finalization
+     */
+    async enrichFinalPlan(finalPlan) {
+        if (!finalPlan || !finalPlan.destination) {
+            return finalPlan;
+        }
+
+        // Geocode destination
+        const destCoords = await this.geocoding.geocode(finalPlan.destination);
+        if (!destCoords) {
+            console.warn("Could not geocode destination:", finalPlan.destination);
+            return finalPlan;
+        }
+
+        // Enrich each day's activities and meals
+        if (finalPlan.itinerary && Array.isArray(finalPlan.itinerary)) {
+            for (const day of finalPlan.itinerary) {
+                // Enrich meals
+                for (const mealType of ['breakfast', 'lunch', 'dinner']) {
+                    if (day[mealType] && day[mealType].name) {
+                        const placeData = await this.placesClient.enrichActivityWithPlaces(
+                            day[mealType].name,
+                            destCoords,
+                            'restaurant'
+                        );
+                        if (placeData) {
+                            day[mealType].rating = placeData.rating;
+                            day[mealType].place_id = placeData.place_id;
+                            day[mealType].coordinates = {
+                                lat: placeData.location?.lat,
+                                lng: placeData.location?.lng
+                            };
+                        }
+                    }
+                }
+
+                // Enrich activities in each time slot
+                for (const timeSlot of ['morning', 'afternoon', 'evening']) {
+                    if (day[timeSlot] && Array.isArray(day[timeSlot])) {
+                        for (const activity of day[timeSlot]) {
+                            if (activity.name) {
+                                const placeType = activity.type === 'restaurant' ? 'restaurant' : 'tourist_attraction';
+                                const placeData = await this.placesClient.enrichActivityWithPlaces(
+                                    activity.name,
+                                    destCoords,
+                                    placeType
+                                );
+                                if (placeData) {
+                                    activity.rating = placeData.rating;
+                                    activity.place_id = placeData.place_id;
+                                    activity.user_ratings_total = placeData.user_ratings_total;
+                                    activity.location = placeData.vicinity;
+                                    activity.coordinates = placeData.location;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        return finalPlan;
+    }
 }
 
 module.exports = TravelPlanner;

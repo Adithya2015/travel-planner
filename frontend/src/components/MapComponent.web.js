@@ -8,7 +8,7 @@ const containerStyle = {
     height: '100%'
 };
 
-const MapComponent = ({ itinerary }) => {
+const MapComponent = ({ itinerary, destination }) => {
     const [apiKey, setApiKey] = useState(null);
     const [loading, setLoading] = useState(true);
 
@@ -26,7 +26,7 @@ const MapComponent = ({ itinerary }) => {
     const locations = [];
     if (itinerary) {
         itinerary.forEach((day, dayIndex) => {
-            const dayNumber = day.day_number || (dayIndex + 1);
+            const dayNumber = day.day_number || day.dayNumber || (dayIndex + 1);
             ['morning', 'afternoon', 'evening'].forEach((slot, slotIndex) => {
                 if (day[slot]) {
                     day[slot].forEach((act, actIndex) => {
@@ -65,17 +65,25 @@ const MapComponent = ({ itinerary }) => {
         );
     }
 
-    if (locations.length === 0) {
+    // Show map even without locations if we have destination or itinerary
+    const hasContent = locations.length > 0 || destination || (itinerary && itinerary.length > 0);
+
+    if (!hasContent) {
         return (
             <View style={[styles.container, styles.center]}>
-                <Text>No map locations found in itinerary.</Text>
+                <Text style={styles.placeholderText}>Map will appear when you start planning</Text>
             </View>
         );
     }
 
     return (
         <View style={styles.container}>
-            <GoogleMapContent apiKey={apiKey} locations={locations} itinerary={itinerary} />
+            <GoogleMapContent
+                apiKey={apiKey}
+                locations={locations}
+                itinerary={itinerary}
+                destination={destination}
+            />
         </View>
     );
 };
@@ -95,13 +103,28 @@ const DAY_COLORS = [
 ];
 
 // Inner component that renders after API is loaded
-const GoogleMapContent = ({ apiKey, locations, itinerary }) => {
+const GoogleMapContent = ({ apiKey, locations, itinerary, destination }) => {
     const [selectedMarker, setSelectedMarker] = useState(null);
     const [map, setMap] = useState(null);
+    const [destinationCenter, setDestinationCenter] = useState(null);
 
     const { isLoaded, loadError } = useJsApiLoader({
-        googleMapsApiKey: apiKey
+        googleMapsApiKey: apiKey,
+        libraries: ['places']
     });
+
+    // Geocode destination if no locations available
+    useEffect(() => {
+        if (isLoaded && locations.length === 0 && destination && window.google) {
+            const geocoder = new window.google.maps.Geocoder();
+            geocoder.geocode({ address: destination }, (results, status) => {
+                if (status === 'OK' && results[0]) {
+                    const loc = results[0].geometry.location;
+                    setDestinationCenter({ lat: loc.lat(), lng: loc.lng() });
+                }
+            });
+        }
+    }, [isLoaded, locations.length, destination]);
 
     // Group locations by day for polylines
     const locationsByDay = {};
@@ -175,11 +198,26 @@ const GoogleMapContent = ({ apiKey, locations, itinerary }) => {
         );
     }
 
+    // Determine map center
+    const mapCenter = locations.length > 0
+        ? { lat: locations[0].lat, lng: locations[0].lng }
+        : destinationCenter || { lat: 37.7749, lng: -122.4194 }; // Default to SF
+
+    // Show loading if we're waiting for destination geocoding
+    if (locations.length === 0 && destination && !destinationCenter) {
+        return (
+            <View style={[styles.innerContainer, styles.center]}>
+                <ActivityIndicator size="large" color="#007AFF" />
+                <Text style={{ marginTop: 10 }}>Loading {destination}...</Text>
+            </View>
+        );
+    }
+
     return (
         <GoogleMap
             mapContainerStyle={containerStyle}
-            center={{ lat: locations[0].lat, lng: locations[0].lng }}
-            zoom={12}
+            center={mapCenter}
+            zoom={locations.length > 0 ? 12 : 11}
             onLoad={onLoad}
             options={{
                 streetViewControl: false,
@@ -245,6 +283,10 @@ const styles = StyleSheet.create({
     center: {
         justifyContent: 'center',
         alignItems: 'center'
+    },
+    placeholderText: {
+        color: '#666',
+        fontSize: 16
     }
 });
 
