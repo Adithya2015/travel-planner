@@ -9,6 +9,7 @@ import {
   Polyline,
 } from "@react-google-maps/api";
 import { getConfig } from "@/lib/api-client";
+import type { SuggestedActivity, GroupedDay } from "@/lib/api-client";
 import { Loader2 } from "lucide-react";
 
 const containerStyle = {
@@ -29,6 +30,10 @@ const DAY_COLORS = [
   "#D81B60", // Pink
   "#00897B", // Teal
 ];
+
+// Unselected activity color
+const UNSELECTED_COLOR = "#9CA3AF";
+const SELECTED_COLOR = "#3B82F6";
 
 interface Coordinates {
   lat: number;
@@ -57,16 +62,30 @@ interface Location {
   actIndex: number;
   day: number;
   desc: string;
+  isSelected?: boolean;
+  activityId?: string;
 }
 
 interface MapComponentProps {
   itinerary?: DayItinerary[];
   destination?: string | null;
+  // New activity-first flow props
+  suggestedActivities?: SuggestedActivity[];
+  selectedActivityIds?: string[];
+  groupedDays?: GroupedDay[];
+  onActivityClick?: (activityId: string) => void;
 }
 
 const libraries: ("places")[] = ["places"];
 
-export default function MapComponent({ itinerary, destination }: MapComponentProps) {
+export default function MapComponent({
+  itinerary,
+  destination,
+  suggestedActivities,
+  selectedActivityIds,
+  groupedDays,
+  onActivityClick,
+}: MapComponentProps) {
   const [apiKey, setApiKey] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
 
@@ -80,9 +99,67 @@ export default function MapComponent({ itinerary, destination }: MapComponentPro
     fetchConfig();
   }, []);
 
-  // Extract locations from itinerary
+  // Extract locations from various data sources
   const locations: Location[] = [];
-  if (itinerary) {
+  const selectedSet = new Set(selectedActivityIds || []);
+
+  // Mode 1: Suggested activities (activity selection phase)
+  if (suggestedActivities && suggestedActivities.length > 0) {
+    suggestedActivities.forEach((activity, actIndex) => {
+      if (activity.coordinates && activity.coordinates.lat && activity.coordinates.lng) {
+        const isSelected = selectedSet.has(activity.id);
+        locations.push({
+          name: activity.name,
+          lat: activity.coordinates.lat,
+          lng: activity.coordinates.lng,
+          slot: activity.bestTimeOfDay || "any",
+          slotIndex: 0,
+          actIndex: actIndex,
+          day: 0, // No day assigned yet
+          desc: activity.type,
+          isSelected: isSelected,
+          activityId: activity.id,
+        });
+      }
+    });
+  }
+  // Mode 2: Grouped days (day grouping and itinerary phases)
+  else if (groupedDays && groupedDays.length > 0) {
+    groupedDays.forEach((day) => {
+      day.activities.forEach((activity, actIndex) => {
+        if (activity.coordinates && activity.coordinates.lat && activity.coordinates.lng) {
+          locations.push({
+            name: activity.name,
+            lat: activity.coordinates.lat,
+            lng: activity.coordinates.lng,
+            slot: activity.bestTimeOfDay || "any",
+            slotIndex: actIndex,
+            actIndex: actIndex,
+            day: day.dayNumber,
+            desc: `Day ${day.dayNumber} - ${activity.type}`,
+            activityId: activity.id,
+          });
+        }
+      });
+      // Also add restaurants if present
+      day.restaurants.forEach((restaurant, restIndex) => {
+        if (restaurant.coordinates && restaurant.coordinates.lat && restaurant.coordinates.lng) {
+          locations.push({
+            name: restaurant.name,
+            lat: restaurant.coordinates.lat,
+            lng: restaurant.coordinates.lng,
+            slot: "restaurant",
+            slotIndex: 100 + restIndex, // Put restaurants after activities
+            actIndex: restIndex,
+            day: day.dayNumber,
+            desc: `Day ${day.dayNumber} - Restaurant`,
+          });
+        }
+      });
+    });
+  }
+  // Mode 3: Legacy itinerary format
+  else if (itinerary) {
     itinerary.forEach((day, dayIndex) => {
       const dayNumber = day.day_number || day.dayNumber || dayIndex + 1;
       (["morning", "afternoon", "evening"] as const).forEach((slot, slotIndex) => {
@@ -136,6 +213,9 @@ export default function MapComponent({ itinerary, destination }: MapComponentPro
     );
   }
 
+  // Determine if we're in activity selection mode
+  const isActivitySelectionMode = suggestedActivities && suggestedActivities.length > 0;
+
   return (
     <div className="h-full w-full min-h-[500px] rounded-xl border border-gray-200 overflow-hidden">
       <GoogleMapContent
@@ -143,6 +223,8 @@ export default function MapComponent({ itinerary, destination }: MapComponentPro
         locations={locations}
         itinerary={itinerary}
         destination={destination}
+        isActivitySelectionMode={isActivitySelectionMode}
+        onActivityClick={onActivityClick}
       />
     </div>
   );
@@ -153,6 +235,8 @@ interface GoogleMapContentProps {
   locations: Location[];
   itinerary?: DayItinerary[];
   destination?: string | null;
+  isActivitySelectionMode?: boolean;
+  onActivityClick?: (activityId: string) => void;
 }
 
 function GoogleMapContent({
@@ -160,6 +244,8 @@ function GoogleMapContent({
   locations,
   itinerary,
   destination,
+  isActivitySelectionMode,
+  onActivityClick,
 }: GoogleMapContentProps) {
   const [selectedMarker, setSelectedMarker] = useState<Location | null>(null);
   const [map, setMap] = useState<google.maps.Map | null>(null);
@@ -230,15 +316,29 @@ function GoogleMapContent({
     }
   }, [map, itinerary, locations]);
 
-  // Get marker icon based on day
-  const getMarkerIcon = (dayNumber: number): google.maps.Symbol => ({
-    path: window.google.maps.SymbolPath.CIRCLE,
-    fillColor: getDayColor(dayNumber),
-    fillOpacity: 1,
-    strokeColor: "#ffffff",
-    strokeWeight: 2,
-    scale: 10,
-  });
+  // Get marker icon based on day or selection state
+  const getMarkerIcon = (loc: Location): google.maps.Symbol => {
+    // In activity selection mode, use selected/unselected colors
+    if (isActivitySelectionMode) {
+      return {
+        path: window.google.maps.SymbolPath.CIRCLE,
+        fillColor: loc.isSelected ? SELECTED_COLOR : UNSELECTED_COLOR,
+        fillOpacity: loc.isSelected ? 1 : 0.6,
+        strokeColor: "#ffffff",
+        strokeWeight: 2,
+        scale: loc.isSelected ? 12 : 8,
+      };
+    }
+    // Otherwise use day-based colors
+    return {
+      path: window.google.maps.SymbolPath.CIRCLE,
+      fillColor: getDayColor(loc.day),
+      fillOpacity: 1,
+      strokeColor: "#ffffff",
+      strokeWeight: 2,
+      scale: 10,
+    };
+  };
 
   if (loadError) {
     return (
@@ -304,8 +404,14 @@ function GoogleMapContent({
         <Marker
           key={idx}
           position={{ lat: loc.lat, lng: loc.lng }}
-          icon={getMarkerIcon(loc.day)}
-          onClick={() => setSelectedMarker(loc)}
+          icon={getMarkerIcon(loc)}
+          onClick={() => {
+            if (isActivitySelectionMode && onActivityClick && loc.activityId) {
+              onActivityClick(loc.activityId);
+            } else {
+              setSelectedMarker(loc);
+            }
+          }}
         />
       ))}
 

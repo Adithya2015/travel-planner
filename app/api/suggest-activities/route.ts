@@ -2,58 +2,72 @@ import { NextRequest, NextResponse } from "next/server";
 import { sessionStore, WORKFLOW_STATES } from "@/lib/services/session-store";
 import { getLLMClient } from "@/lib/services/llm-client";
 import { getGeocodingService } from "@/lib/services/geocoding-service";
+import { getPlacesClient, PlacesClient } from "@/lib/services/places-client";
+import type { SuggestedActivity } from "@/lib/models/travel-plan";
 
-interface ActivityOption {
-  id: string;
-  name: string;
-  description?: string;
-  coordinates?: { lat: number; lng: number };
-}
-
-interface ActivitySuggestions {
-  morningActivities?: ActivityOption[];
-  afternoonActivities?: ActivityOption[];
-  eveningActivities?: ActivityOption[];
-}
-
-async function geocodeActivitySuggestions(
-  suggestions: ActivitySuggestions,
+/**
+ * Enrich activities with Places API data (coordinates, ratings, place_id)
+ */
+async function enrichActivitiesWithPlaces(
+  activities: SuggestedActivity[],
   destination: string
-): Promise<ActivitySuggestions> {
+): Promise<SuggestedActivity[]> {
   const geocodingService = getGeocodingService();
-  if (!geocodingService) return suggestions;
+  let placesClient: PlacesClient | null = null;
+  try {
+    placesClient = getPlacesClient();
+  } catch {
+    console.warn("Places client not available, using geocoding only");
+  }
 
-  const geocodeOption = async (option: ActivityOption): Promise<ActivityOption> => {
-    if (option.coordinates) return option;
+  const enrichActivity = async (activity: SuggestedActivity): Promise<SuggestedActivity> => {
     try {
-      const query = `${option.name}, ${destination}`;
-      const coords = await geocodingService.geocode(query);
-      if (coords) {
-        return { ...option, coordinates: coords };
+      // First try to get place data from Places API
+      if (placesClient) {
+        const searchQuery = `${activity.name}, ${destination}`;
+        const places = await placesClient.searchPlaces(searchQuery, null, 5000);
+
+        if (places && places.length > 0) {
+          const place = places[0];
+          return {
+            ...activity,
+            coordinates: place.location,
+            rating: place.rating || null,
+            place_id: place.place_id,
+          };
+        }
+      }
+
+      // Fallback to geocoding
+      if (geocodingService) {
+        const query = `${activity.name}, ${destination}`;
+        const coords = await geocodingService.geocode(query);
+        if (coords) {
+          return { ...activity, coordinates: coords };
+        }
       }
     } catch (error) {
-      console.warn(`Failed to geocode ${option.name}:`, (error as Error).message);
+      console.warn(`Failed to enrich ${activity.name}:`, (error as Error).message);
     }
-    return option;
+    return activity;
   };
 
-  const [morning, afternoon, evening] = await Promise.all([
-    Promise.all((suggestions.morningActivities || []).map(geocodeOption)),
-    Promise.all((suggestions.afternoonActivities || []).map(geocodeOption)),
-    Promise.all((suggestions.eveningActivities || []).map(geocodeOption)),
-  ]);
+  // Process activities in parallel with concurrency limit
+  const BATCH_SIZE = 5;
+  const enrichedActivities: SuggestedActivity[] = [];
 
-  return {
-    ...suggestions,
-    morningActivities: morning,
-    afternoonActivities: afternoon,
-    eveningActivities: evening,
-  };
+  for (let i = 0; i < activities.length; i += BATCH_SIZE) {
+    const batch = activities.slice(i, i + BATCH_SIZE);
+    const enrichedBatch = await Promise.all(batch.map(enrichActivity));
+    enrichedActivities.push(...enrichedBatch);
+  }
+
+  return enrichedActivities;
 }
 
 export async function POST(request: NextRequest) {
   try {
-    const { sessionId, dayNumber, userMessage } = await request.json();
+    const { sessionId } = await request.json();
 
     if (!sessionId) {
       return NextResponse.json(
@@ -70,58 +84,51 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    if (
-      session.workflowState !== WORKFLOW_STATES.SKELETON &&
-      session.workflowState !== WORKFLOW_STATES.EXPAND_DAY
-    ) {
+    // Validate state - should be called after INFO_GATHERING is complete
+    if (session.workflowState !== WORKFLOW_STATES.INFO_GATHERING) {
       return NextResponse.json(
         {
           success: false,
-          message: "Can only suggest activities from SKELETON or EXPAND_DAY state",
+          message: "Can only suggest activities from INFO_GATHERING state",
         },
         { status: 400 }
       );
     }
 
-    const targetDay = dayNumber || session.currentExpandDay || 1;
-    const skeletonDay = session.skeleton?.days?.find((d) => d.dayNumber === targetDay);
-
-    if (!skeletonDay) {
+    // Validate required trip info
+    if (!session.tripInfo.destination || !session.tripInfo.startDate || !session.tripInfo.endDate) {
       return NextResponse.json(
-        { success: false, message: `Day ${targetDay} not found in skeleton` },
+        {
+          success: false,
+          message: "Missing required trip info: destination, startDate, or endDate",
+        },
         { status: 400 }
       );
     }
 
+    // Generate top 15 activities using LLM
     const llmClient = getLLMClient();
-    const result = await llmClient.suggestActivities({
+    const result = await llmClient.suggestTopActivities({
       tripInfo: session.tripInfo,
-      skeletonDay,
-      userMessage: userMessage || "",
     });
 
     if (!result.success) {
       return NextResponse.json(result, { status: 500 });
     }
 
-    // Geocode activity suggestions
-    let suggestions = result.suggestions;
+    // Enrich activities with Places API data
+    let activities = result.activities;
     try {
-      if (session.tripInfo.destination) {
-        suggestions = await geocodeActivitySuggestions(suggestions, session.tripInfo.destination);
-      }
-    } catch (geocodeError) {
-      console.warn("Geocoding activity suggestions failed:", (geocodeError as Error).message);
+      activities = await enrichActivitiesWithPlaces(activities, session.tripInfo.destination);
+    } catch (enrichError) {
+      console.warn("Enriching activities failed:", (enrichError as Error).message);
     }
 
-    // Store activity suggestions in session
+    // Update session state
     sessionStore.update(sessionId, {
-      workflowState: WORKFLOW_STATES.EXPAND_DAY,
-      currentExpandDay: targetDay,
-      currentActivitySuggestions: {
-        dayNumber: targetDay,
-        suggestions: suggestions,
-      },
+      workflowState: WORKFLOW_STATES.SUGGEST_ACTIVITIES,
+      suggestedActivities: activities,
+      selectedActivityIds: [],
     });
 
     sessionStore.addToConversation(sessionId, "assistant", result.message);
@@ -129,10 +136,9 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({
       success: true,
       sessionId,
-      workflowState: WORKFLOW_STATES.EXPAND_DAY,
+      workflowState: WORKFLOW_STATES.SUGGEST_ACTIVITIES,
       message: result.message,
-      suggestions: suggestions,
-      dayNumber: targetDay,
+      suggestedActivities: activities,
     });
   } catch (error) {
     console.error("Error in suggestActivities:", error);

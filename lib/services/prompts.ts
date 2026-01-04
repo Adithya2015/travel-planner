@@ -2,7 +2,7 @@
  * Externalized system prompts for LLM client
  */
 
-import type { TripInfo, SkeletonDay, ExpandedDay, DaySuggestions } from "@/lib/models/travel-plan";
+import type { TripInfo, SkeletonDay, ExpandedDay, DaySuggestions, SuggestedActivity } from "@/lib/models/travel-plan";
 
 export const SYSTEM_PROMPTS = {
   TRAVEL_PLANNER: `You are an expert travel planner. Generate detailed, realistic travel plans in JSON format.
@@ -272,6 +272,96 @@ You MUST:
 4. Ensure the itinerary covers all days of the trip
 5. Provide a summary saying the itinerary is now finalized and ready
 6. Include helpful "tips" array with destination-specific advice`,
+
+  // ============================================
+  // NEW FLOW: Activity-First Planning Prompts
+  // ============================================
+
+  SUGGEST_TOP_ACTIVITIES: `You are an expert travel planner suggesting the TOP 15 activities for a trip.
+
+For the given destination and user interests, suggest exactly 15 activities that:
+1. Match the user's interests and activity level
+2. Are real, specific places (not generic descriptions)
+3. Cover a variety of types (landmarks, museums, nature, experiences, neighborhoods)
+4. Include both popular attractions and hidden gems
+5. Can realistically be done during the trip duration
+
+RESPONSE FORMAT (JSON):
+{
+  "message": "Conversational intro presenting these 15 amazing activities",
+  "activities": [
+    {
+      "id": "act1",
+      "name": "Specific Place Name",
+      "type": "museum|landmark|park|viewpoint|market|experience|neighborhood|beach|temple|gallery",
+      "description": "2-3 sentences about what makes this special and what to do there",
+      "estimatedDuration": "2-3 hours",
+      "estimatedCost": 15,
+      "bestTimeOfDay": "morning|afternoon|evening|any",
+      "neighborhood": "Area/district of the city"
+    }
+  ]
+}
+
+RULES:
+- Suggest EXACTLY 15 activities
+- Use REAL, specific place names that exist in the destination
+- Each activity must have a unique id (act1, act2, ... act15)
+- Provide variety: mix popular spots with hidden gems
+- Balance different activity types based on user interests
+- bestTimeOfDay helps with grouping activities into days later
+- neighborhood helps with proximity-based grouping
+- estimatedCost should be realistic for the destination (0 for free activities)
+- Return ONLY valid JSON, no additional text`,
+
+  GROUP_ACTIVITIES_INTO_DAYS: `You are an expert travel planner grouping selected activities into days.
+
+Given a list of selected activities with their coordinates, duration, and best time of day, group them into days that:
+1. MINIMIZE travel time between activities (group by proximity/neighborhood)
+2. Respect best time of day (morning activities first, evening activities last)
+3. Create balanced days (not too packed, not too empty - aim for 2-4 activities per day)
+4. Create a logical flow within each day
+5. Consider opening hours and realistic timing
+
+RESPONSE FORMAT (JSON):
+{
+  "message": "Explanation of how you organized the activities into days",
+  "dayGroups": [
+    {
+      "dayNumber": 1,
+      "date": "YYYY-MM-DD",
+      "theme": "Auto-generated catchy theme based on activities (e.g., 'Historic Heart & Local Flavors')",
+      "activityIds": ["act1", "act3", "act5"]
+    }
+  ]
+}
+
+RULES:
+- Create exactly the number of days specified in the trip duration
+- Each activity should appear in exactly ONE day
+- Order activities within each day by optimal timing
+- Group nearby activities together when possible
+- Create thematic coherence within each day
+- Generate a descriptive, engaging theme for each day
+- Theme should capture the essence of activities in that day
+- Return ONLY valid JSON, no additional text`,
+
+  REGENERATE_DAY_THEME: `You are generating a catchy, descriptive theme for a day of activities.
+
+Given a list of activities for a single day, create a theme that:
+1. Captures the essence of what the traveler will experience
+2. Is engaging and evocative (not just a list)
+3. Is 3-6 words long
+
+RESPONSE FORMAT (JSON):
+{
+  "theme": "Historic Heart & Local Flavors"
+}
+
+RULES:
+- Theme should be creative and memorable
+- Reflect the types of activities and areas visited
+- Return ONLY valid JSON, no additional text`,
 };
 
 interface ConversationMessage {
@@ -647,4 +737,90 @@ Enhance each activity with detailed descriptions and practical tips.`,
 
 export function getSessionWelcomeMessage(): string {
   return "Hello! I'm your AI travel assistant. Let's plan your perfect trip together!\n\nTo get started, could you tell me:\n1. Where would you like to go?\n2. When are you planning to travel? (dates)\n\nFeel free to share any other preferences like interests, activity level, or budget!";
+}
+
+// ============================================
+// NEW FLOW: Activity-First Message Builders
+// ============================================
+
+export function buildSuggestTopActivitiesMessages({ tripInfo }: { tripInfo: TripInfo }) {
+  const messages: Array<{ role: "system" | "user" | "assistant"; content: string }> = [
+    { role: "system", content: SYSTEM_PROMPTS.SUGGEST_TOP_ACTIVITIES },
+  ];
+
+  messages.push({
+    role: "user",
+    content: `Suggest 15 top activities for the following trip:
+
+Destination: ${tripInfo.destination}
+Dates: ${tripInfo.startDate} to ${tripInfo.endDate}
+Duration: ${tripInfo.durationDays} days
+Interests: ${tripInfo.interests.join(", ") || "General tourism"}
+Activity Level: ${tripInfo.activityLevel}
+Travelers: ${tripInfo.travelers || 1}
+${tripInfo.budget ? `Budget: ${tripInfo.budget}` : ""}
+
+Generate exactly 15 activity suggestions that match the traveler's interests.`,
+  });
+
+  return messages;
+}
+
+export function buildGroupActivitiesMessages({
+  tripInfo,
+  activities,
+}: {
+  tripInfo: TripInfo;
+  activities: SuggestedActivity[];
+}) {
+  const messages: Array<{ role: "system" | "user" | "assistant"; content: string }> = [
+    { role: "system", content: SYSTEM_PROMPTS.GROUP_ACTIVITIES_INTO_DAYS },
+  ];
+
+  // Create a simplified version of activities for the LLM
+  const activitiesForLLM = activities.map((a) => ({
+    id: a.id,
+    name: a.name,
+    type: a.type,
+    estimatedDuration: a.estimatedDuration,
+    bestTimeOfDay: a.bestTimeOfDay,
+    neighborhood: a.neighborhood,
+    coordinates: a.coordinates,
+  }));
+
+  messages.push({
+    role: "user",
+    content: `Group these selected activities into ${tripInfo.durationDays} days for a trip to ${tripInfo.destination}:
+
+Trip Dates: ${tripInfo.startDate} to ${tripInfo.endDate}
+Duration: ${tripInfo.durationDays} days
+
+Selected Activities:
+${JSON.stringify(activitiesForLLM, null, 2)}
+
+Group these activities into days based on:
+1. Proximity (nearby activities on same day)
+2. Best time of day (morning/afternoon/evening)
+3. Balanced distribution across days
+4. Logical flow within each day
+
+Generate day groups with engaging themes for each day.`,
+  });
+
+  return messages;
+}
+
+export function buildRegenerateDayThemeMessages({ activities }: { activities: SuggestedActivity[] }) {
+  const messages: Array<{ role: "system" | "user" | "assistant"; content: string }> = [
+    { role: "system", content: SYSTEM_PROMPTS.REGENERATE_DAY_THEME },
+  ];
+
+  const activitySummary = activities.map((a) => `${a.name} (${a.type})`).join(", ");
+
+  messages.push({
+    role: "user",
+    content: `Generate a theme for a day with these activities: ${activitySummary}`,
+  });
+
+  return messages;
 }

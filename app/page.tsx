@@ -1,53 +1,557 @@
 "use client";
 
-import { useState } from "react";
-import { useRouter } from "next/navigation";
+import { useState, useEffect, useRef } from "react";
 import { Button } from "@/components/ui/button";
-import { Separator } from "@/components/ui/separator";
-import { Plane } from "lucide-react";
+import { Input } from "@/components/ui/input";
+import { Badge } from "@/components/ui/badge";
+import { ScrollArea } from "@/components/ui/scroll-area";
+import { Loader2, Send } from "lucide-react";
+import MapComponent from "@/components/MapComponent";
+import { ActivitySelectionView } from "@/components/ActivitySelectionView";
+import { DayGroupingView } from "@/components/DayGroupingView";
+import { RestaurantSelectionView } from "@/components/RestaurantSelectionView";
+import { DayItineraryView } from "@/components/DayItineraryView";
+import {
+  startSession,
+  chat,
+  finalize,
+  suggestTopActivities,
+  selectActivities,
+  groupDays,
+  adjustDayGroups,
+  confirmDayGrouping,
+  getRestaurantSuggestions,
+  setMealPreferences,
+  type TripInfo,
+  type SuggestedActivity,
+  type GroupedDay,
+  type RestaurantSuggestion,
+  type DayGroup,
+} from "@/lib/api-client";
 
-export default function HomePage() {
+// Workflow states
+const WORKFLOW_STATES = {
+  INFO_GATHERING: "INFO_GATHERING",
+  SUGGEST_ACTIVITIES: "SUGGEST_ACTIVITIES",
+  SELECT_ACTIVITIES: "SELECT_ACTIVITIES",
+  GROUP_DAYS: "GROUP_DAYS",
+  DAY_ITINERARY: "DAY_ITINERARY",
+  MEAL_PREFERENCES: "MEAL_PREFERENCES",
+  REVIEW: "REVIEW",
+  FINALIZE: "FINALIZE",
+};
+
+interface ChatMessage {
+  role: "user" | "assistant";
+  content: string;
+}
+
+export default function PlannerPage() {
+  // Session state
+  const [sessionId, setSessionId] = useState<string | null>(null);
+  const [workflowState, setWorkflowState] = useState(WORKFLOW_STATES.INFO_GATHERING);
+
+  // Trip data
+  const [tripInfo, setTripInfo] = useState<TripInfo | null>(null);
+
+  // New activity-first flow state
+  const [suggestedActivities, setSuggestedActivities] = useState<SuggestedActivity[]>([]);
+  const [selectedActivityIds, setSelectedActivityIds] = useState<string[]>([]);
+  const [dayGroups, setDayGroups] = useState<DayGroup[]>([]);
+  const [groupedDays, setGroupedDays] = useState<GroupedDay[]>([]);
+  const [restaurantSuggestions, setRestaurantSuggestions] = useState<RestaurantSuggestion[]>([]);
+  const [selectedRestaurantIds, setSelectedRestaurantIds] = useState<string[]>([]);
+
+  // UI state
   const [loading, setLoading] = useState(false);
-  const router = useRouter();
+  const [initializing, setInitializing] = useState(true);
+  const [chatInput, setChatInput] = useState("");
+  const [chatHistory, setChatHistory] = useState<ChatMessage[]>([]);
+  const [canProceed, setCanProceed] = useState(false);
 
-  const handleStart = () => {
-    setLoading(true);
-    router.push("/planner");
+  const chatScrollRef = useRef<HTMLDivElement>(null);
+
+  // Auto-scroll chat
+  useEffect(() => {
+    if (chatScrollRef.current) {
+      setTimeout(() => {
+        chatScrollRef.current?.scrollTo({
+          top: chatScrollRef.current.scrollHeight,
+          behavior: "smooth",
+        });
+      }, 100);
+    }
+  }, [chatHistory]);
+
+  // Initialize session on mount
+  useEffect(() => {
+    initializeSession();
+  }, []);
+
+  const initializeSession = async () => {
+    try {
+      const response = await startSession();
+      if (response.success) {
+        setSessionId(response.sessionId);
+        setWorkflowState(response.workflowState);
+        setChatHistory([{ role: "assistant", content: response.message }]);
+      }
+    } catch (error) {
+      console.error("Failed to start session:", error);
+      alert("Failed to start planning session. Please try again.");
+    } finally {
+      setInitializing(false);
+    }
   };
 
-  return (
-    <div className="min-h-screen bg-gradient-to-b from-blue-50 to-white">
-      <div className="max-w-md mx-auto px-5 py-16">
-        <div className="text-center mb-8">
-          <div className="inline-flex items-center justify-center w-16 h-16 rounded-full bg-primary/10 mb-4">
-            <Plane className="w-8 h-8 text-primary" />
+  // Handle chat messages
+  const handleChat = async () => {
+    if (!chatInput.trim() || !sessionId) return;
+
+    const userMessage = chatInput;
+    setChatInput("");
+    setChatHistory((prev) => [...prev, { role: "user", content: userMessage }]);
+    setLoading(true);
+
+    try {
+      const response = await chat(sessionId, userMessage);
+      if (response.success) {
+        setChatHistory((prev) => [...prev, { role: "assistant", content: response.message }]);
+        if (response.tripInfo) setTripInfo(response.tripInfo);
+        if (response.canProceed !== undefined) setCanProceed(response.canProceed);
+      }
+    } catch (error) {
+      console.error("Chat error:", error);
+      setChatHistory((prev) => [
+        ...prev,
+        { role: "assistant", content: "Sorry, something went wrong. Please try again." },
+      ]);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  // Suggest top 15 activities
+  const handleSuggestActivities = async () => {
+    if (!sessionId) return;
+    setLoading(true);
+
+    try {
+      const response = await suggestTopActivities(sessionId);
+      if (response.success) {
+        setWorkflowState(WORKFLOW_STATES.SUGGEST_ACTIVITIES);
+        setSuggestedActivities(response.suggestedActivities || []);
+        setSelectedActivityIds([]);
+        setChatHistory((prev) => [...prev, { role: "assistant", content: response.message }]);
+      }
+    } catch (error) {
+      console.error("Suggest activities error:", error);
+      alert("Failed to suggest activities. Please try again.");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  // Handle activity selection change
+  const handleActivitySelectionChange = (ids: string[]) => {
+    setSelectedActivityIds(ids);
+  };
+
+  // Confirm activity selection and group into days
+  const handleConfirmActivitySelection = async () => {
+    if (!sessionId || selectedActivityIds.length === 0) return;
+    setLoading(true);
+
+    try {
+      // First save selections
+      const selectResponse = await selectActivities(sessionId, selectedActivityIds);
+      if (!selectResponse.success) {
+        throw new Error(selectResponse.message);
+      }
+
+      // Then group into days
+      const groupResponse = await groupDays(sessionId);
+      if (groupResponse.success) {
+        setWorkflowState(WORKFLOW_STATES.GROUP_DAYS);
+        setDayGroups(groupResponse.dayGroups || []);
+        setGroupedDays(groupResponse.groupedDays || []);
+        setChatHistory((prev) => [...prev, { role: "assistant", content: groupResponse.message }]);
+      }
+    } catch (error) {
+      console.error("Group days error:", error);
+      alert("Failed to organize activities. Please try again.");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  // Handle moving activity between days
+  const handleMoveActivity = async (activityId: string, fromDay: number, toDay: number) => {
+    if (!sessionId) return;
+    setLoading(true);
+
+    try {
+      const response = await adjustDayGroups(sessionId, activityId, fromDay, toDay);
+      if (response.success) {
+        setDayGroups(response.dayGroups || []);
+        setGroupedDays(response.groupedDays || []);
+      }
+    } catch (error) {
+      console.error("Move activity error:", error);
+      alert("Failed to move activity. Please try again.");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  // Confirm day grouping
+  const handleConfirmDayGrouping = async () => {
+    if (!sessionId) return;
+    setLoading(true);
+
+    try {
+      const response = await confirmDayGrouping(sessionId);
+      if (response.success) {
+        setWorkflowState(WORKFLOW_STATES.DAY_ITINERARY);
+        setGroupedDays(response.groupedDays || []);
+        setChatHistory((prev) => [...prev, { role: "assistant", content: response.message }]);
+      }
+    } catch (error) {
+      console.error("Confirm grouping error:", error);
+      alert("Failed to confirm day grouping. Please try again.");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  // Get restaurant suggestions
+  const handleGetRestaurants = async () => {
+    if (!sessionId) return;
+    setLoading(true);
+
+    try {
+      const response = await getRestaurantSuggestions(sessionId);
+      if (response.success) {
+        setWorkflowState(WORKFLOW_STATES.MEAL_PREFERENCES);
+        setRestaurantSuggestions(response.restaurantSuggestions || []);
+        setSelectedRestaurantIds([]);
+        setChatHistory((prev) => [...prev, { role: "assistant", content: response.message }]);
+      }
+    } catch (error) {
+      console.error("Get restaurants error:", error);
+      alert("Failed to find restaurants. Please try again.");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  // Handle restaurant selection change
+  const handleRestaurantSelectionChange = (ids: string[]) => {
+    setSelectedRestaurantIds(ids);
+  };
+
+  // Handle meal preferences (add restaurants or skip)
+  const handleMealPreferences = async (wantsRestaurants: boolean) => {
+    if (!sessionId) return;
+    setLoading(true);
+
+    try {
+      const response = await setMealPreferences(
+        sessionId,
+        wantsRestaurants,
+        wantsRestaurants ? selectedRestaurantIds : undefined
+      );
+      if (response.success) {
+        setWorkflowState(WORKFLOW_STATES.REVIEW);
+        setGroupedDays(response.groupedDays || []);
+        setChatHistory((prev) => [...prev, { role: "assistant", content: response.message }]);
+      }
+    } catch (error) {
+      console.error("Meal preferences error:", error);
+      alert("Failed to save preferences. Please try again.");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  // Skip restaurants and go to review
+  const handleSkipRestaurants = async () => {
+    if (!sessionId) return;
+    setLoading(true);
+
+    try {
+      const response = await setMealPreferences(sessionId, false);
+      if (response.success) {
+        setWorkflowState(WORKFLOW_STATES.REVIEW);
+        setGroupedDays(response.groupedDays || []);
+        setChatHistory((prev) => [...prev, { role: "assistant", content: response.message }]);
+      }
+    } catch (error) {
+      console.error("Skip restaurants error:", error);
+      alert("Failed to proceed. Please try again.");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  // Finalize
+  const handleFinalize = async () => {
+    if (!sessionId) return;
+    setLoading(true);
+
+    try {
+      const response = await finalize(sessionId);
+      if (response.success) {
+        setWorkflowState(WORKFLOW_STATES.FINALIZE);
+        setChatHistory((prev) => [...prev, { role: "assistant", content: response.message }]);
+      }
+    } catch (error) {
+      console.error("Finalize error:", error);
+      alert("Failed to finalize itinerary. Please try again.");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  // Handle clicking activity on map
+  const handleMapActivityClick = (activityId: string) => {
+    if (workflowState === WORKFLOW_STATES.SUGGEST_ACTIVITIES) {
+      // Toggle selection
+      setSelectedActivityIds((prev) =>
+        prev.includes(activityId) ? prev.filter((id) => id !== activityId) : [...prev, activityId]
+      );
+    }
+  };
+
+  // Get state label
+  const getStateLabel = () => {
+    switch (workflowState) {
+      case WORKFLOW_STATES.INFO_GATHERING:
+        return "Gathering Info";
+      case WORKFLOW_STATES.SUGGEST_ACTIVITIES:
+        return "Select Activities";
+      case WORKFLOW_STATES.SELECT_ACTIVITIES:
+        return "Select Activities";
+      case WORKFLOW_STATES.GROUP_DAYS:
+        return "Organize Days";
+      case WORKFLOW_STATES.DAY_ITINERARY:
+        return "Your Itinerary";
+      case WORKFLOW_STATES.MEAL_PREFERENCES:
+        return "Add Restaurants";
+      case WORKFLOW_STATES.REVIEW:
+        return "Review";
+      case WORKFLOW_STATES.FINALIZE:
+        return "Finalized";
+      default:
+        return "";
+    }
+  };
+
+  // Render left panel content based on state
+  const renderLeftPanelContent = () => {
+    switch (workflowState) {
+      case WORKFLOW_STATES.SUGGEST_ACTIVITIES:
+      case WORKFLOW_STATES.SELECT_ACTIVITIES:
+        return (
+          <div className="p-4">
+            <ActivitySelectionView
+              activities={suggestedActivities}
+              selectedIds={selectedActivityIds}
+              onSelectionChange={handleActivitySelectionChange}
+              onConfirm={handleConfirmActivitySelection}
+              isLoading={loading}
+            />
           </div>
-          <h1 className="text-3xl font-bold text-gray-900 mb-2">
-            Travel Planner
-          </h1>
-          <p className="text-gray-600">
-            Your AI-powered travel planning assistant
-          </p>
+        );
+
+      case WORKFLOW_STATES.GROUP_DAYS:
+        return (
+          <div className="p-4">
+            <DayGroupingView
+              groupedDays={groupedDays}
+              onMoveActivity={handleMoveActivity}
+              onConfirm={handleConfirmDayGrouping}
+              isLoading={loading}
+            />
+          </div>
+        );
+
+      case WORKFLOW_STATES.MEAL_PREFERENCES:
+        return (
+          <div className="p-4">
+            <RestaurantSelectionView
+              restaurants={restaurantSuggestions}
+              selectedIds={selectedRestaurantIds}
+              onSelectionChange={handleRestaurantSelectionChange}
+              onConfirm={handleMealPreferences}
+              isLoading={loading}
+            />
+          </div>
+        );
+
+      case WORKFLOW_STATES.DAY_ITINERARY:
+      case WORKFLOW_STATES.REVIEW:
+      case WORKFLOW_STATES.FINALIZE:
+        return (
+          <div className="p-4">
+            <DayItineraryView groupedDays={groupedDays} tripInfo={tripInfo || undefined} />
+          </div>
+        );
+
+      default:
+        return null;
+    }
+  };
+
+  // Render action button
+  const renderActionButton = () => {
+    switch (workflowState) {
+      case WORKFLOW_STATES.INFO_GATHERING:
+        return canProceed ? (
+          <Button onClick={handleSuggestActivities} disabled={loading} className="w-full mt-4">
+            {loading ? <Loader2 className="w-4 h-4 animate-spin mr-2" /> : null}
+            Find Top Activities
+          </Button>
+        ) : null;
+
+      case WORKFLOW_STATES.DAY_ITINERARY:
+        return (
+          <div className="flex gap-2 mt-4">
+            <Button onClick={handleGetRestaurants} disabled={loading} className="flex-1">
+              {loading ? <Loader2 className="w-4 h-4 animate-spin mr-2" /> : null}
+              Add Restaurants
+            </Button>
+            <Button onClick={handleSkipRestaurants} disabled={loading} variant="outline" className="flex-1">
+              Skip to Review
+            </Button>
+          </div>
+        );
+
+      case WORKFLOW_STATES.REVIEW:
+        return (
+          <Button
+            onClick={handleFinalize}
+            disabled={loading}
+            className="w-full mt-4 bg-green-600 hover:bg-green-700"
+          >
+            {loading ? <Loader2 className="w-4 h-4 animate-spin mr-2" /> : null}
+            Finalize Itinerary
+          </Button>
+        );
+
+      default:
+        return null;
+    }
+  };
+
+  if (initializing) {
+    return (
+      <div className="h-screen flex items-center justify-center bg-gray-100">
+        <div className="flex flex-col items-center gap-3">
+          <Loader2 className="w-10 h-10 animate-spin text-blue-500" />
+          <span className="text-gray-600">Starting your planning session...</span>
+        </div>
+      </div>
+    );
+  }
+
+  const isFinalized = workflowState === WORKFLOW_STATES.FINALIZE;
+  const showMap =
+    workflowState === WORKFLOW_STATES.INFO_GATHERING ||
+    suggestedActivities.length > 0 ||
+    groupedDays.length > 0;
+
+  return (
+    <div className="h-screen overflow-hidden bg-gray-100">
+      <div className="flex h-full">
+        {/* Left Panel: Map + Content View */}
+        <div className="w-[60%] h-full overflow-y-auto">
+          {/* Map */}
+          <div className="h-[400px] min-h-[300px]">
+            <MapComponent
+              destination={tripInfo?.destination}
+              suggestedActivities={
+                workflowState === WORKFLOW_STATES.SUGGEST_ACTIVITIES ||
+                workflowState === WORKFLOW_STATES.SELECT_ACTIVITIES
+                  ? suggestedActivities
+                  : undefined
+              }
+              selectedActivityIds={selectedActivityIds}
+              groupedDays={
+                workflowState === WORKFLOW_STATES.GROUP_DAYS ||
+                workflowState === WORKFLOW_STATES.DAY_ITINERARY ||
+                workflowState === WORKFLOW_STATES.MEAL_PREFERENCES ||
+                workflowState === WORKFLOW_STATES.REVIEW ||
+                workflowState === WORKFLOW_STATES.FINALIZE
+                  ? groupedDays
+                  : undefined
+              }
+              onActivityClick={handleMapActivityClick}
+            />
+          </div>
+
+          {/* State-specific content */}
+          {renderLeftPanelContent()}
         </div>
 
-        <div className="bg-white rounded-2xl shadow-lg p-6 mb-8">
-          <p className="text-lg text-gray-600 leading-7 text-center">
-            Welcome! Let&apos;s plan your next adventure together. Tell me about your
-            destination, dates, and interests, and I&apos;ll create a personalized
-            itinerary just for you.
-          </p>
+        {/* Right Panel: Chat */}
+        <div className="w-[40%] h-full bg-white border-l border-gray-200 flex flex-col">
+          {/* Header */}
+          <div className="p-4 border-b border-gray-200 text-center flex-shrink-0">
+            <h1 className="text-xl font-bold text-gray-800">
+              {tripInfo?.destination || "Planning Your Trip"}
+            </h1>
+            {tripInfo?.startDate && tripInfo?.endDate && (
+              <p className="text-sm text-gray-500">
+                {tripInfo.startDate} - {tripInfo.endDate}
+              </p>
+            )}
+            <Badge className="mt-2 bg-blue-500">{getStateLabel()}</Badge>
+          </div>
+
+          {/* Chat Messages */}
+          <ScrollArea className="flex-1 p-4" ref={chatScrollRef}>
+            <div className="space-y-3">
+              {chatHistory.map((msg, idx) => (
+                <div
+                  key={idx}
+                  className={`p-3 rounded-2xl max-w-[85%] ${
+                    msg.role === "user" ? "bg-blue-500 text-white ml-auto" : "bg-gray-200 text-gray-800"
+                  }`}
+                >
+                  <p className="whitespace-pre-wrap">{msg.content}</p>
+                </div>
+              ))}
+              {loading && (
+                <div className="flex justify-center">
+                  <Loader2 className="w-6 h-6 animate-spin text-blue-500" />
+                </div>
+              )}
+            </div>
+
+            {/* Action Button */}
+            {renderActionButton()}
+          </ScrollArea>
+
+          {/* Chat Input */}
+          <div className="p-4 border-t border-gray-200 flex gap-2 flex-shrink-0">
+            <Input
+              value={chatInput}
+              onChange={(e) => setChatInput(e.target.value)}
+              placeholder={
+                workflowState === WORKFLOW_STATES.INFO_GATHERING
+                  ? "Tell me about your trip..."
+                  : "Ask questions or request changes..."
+              }
+              onKeyDown={(e) => e.key === "Enter" && handleChat()}
+              disabled={loading || isFinalized}
+              className="flex-1"
+            />
+            <Button onClick={handleChat} disabled={loading || !chatInput.trim() || isFinalized} size="icon">
+              {loading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Send className="w-4 h-4" />}
+            </Button>
+          </div>
         </div>
-
-        <Separator className="my-6" />
-
-        <Button
-          onClick={handleStart}
-          disabled={loading}
-          size="lg"
-          className="w-full h-14 rounded-full text-lg"
-        >
-          {loading ? "Loading..." : "Start Planning with AI"}
-        </Button>
       </div>
     </div>
   );

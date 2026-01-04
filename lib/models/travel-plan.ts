@@ -257,3 +257,62 @@ export interface StoredMealSuggestions {
   dayNumber: number;
   suggestions: MealSuggestionsFromPlaces;
 }
+
+// ============================================
+// NEW FLOW: Activity-First Planning Schemas
+// ============================================
+
+// Suggested activity from LLM (top 15)
+export const SuggestedActivitySchema = z.object({
+  id: z.string(),
+  name: z.string(),
+  type: z.string(), // museum, landmark, park, viewpoint, market, experience, neighborhood
+  description: z.string(),
+  estimatedDuration: z.string(), // "2-3 hours"
+  estimatedCost: z.number().nullable(),
+  bestTimeOfDay: z.enum(["morning", "afternoon", "evening", "any"]),
+  neighborhood: z.string().nullable().optional(),
+  // Enriched from Places API:
+  coordinates: CoordinatesSchema.nullable().optional(),
+  rating: z.number().nullable().optional(),
+  place_id: z.string().nullable().optional(),
+  opening_hours: z.string().nullable().optional(),
+});
+
+export type SuggestedActivity = z.infer<typeof SuggestedActivitySchema>;
+
+// Day grouping from LLM
+export const DayGroupSchema = z.object({
+  dayNumber: z.number(),
+  date: z.string(),
+  theme: z.string(), // Auto-generated theme based on grouped activities
+  activityIds: z.array(z.string()), // References to SuggestedActivity.id
+});
+
+export type DayGroup = z.infer<typeof DayGroupSchema>;
+
+// Restaurant suggestion from Places API
+export const RestaurantSuggestionSchema = z.object({
+  id: z.string(),
+  name: z.string(),
+  cuisine: z.string().nullable(),
+  rating: z.number().nullable(),
+  priceRange: z.string().nullable(),
+  coordinates: CoordinatesSchema,
+  place_id: z.string(),
+  vicinity: z.string().nullable(),
+  photo_url: z.string().nullable().optional(),
+});
+
+export type RestaurantSuggestion = z.infer<typeof RestaurantSuggestionSchema>;
+
+// Grouped day with activities and optional restaurants
+export const GroupedDaySchema = z.object({
+  dayNumber: z.number(),
+  date: z.string(),
+  theme: z.string(),
+  activities: z.array(SuggestedActivitySchema),
+  restaurants: z.array(RestaurantSuggestionSchema).default([]),
+});
+
+export type GroupedDay = z.infer<typeof GroupedDaySchema>;

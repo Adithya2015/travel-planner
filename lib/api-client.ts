@@ -66,6 +66,15 @@ export interface SessionResponse {
   expandedDay?: ExpandedDay;
   allExpandedDays?: Record<number, ExpandedDay>;
   suggestModifications?: boolean;
+  // New activity-first flow fields
+  suggestedActivities?: SuggestedActivity[];
+  selectedActivityIds?: string[];
+  selectedCount?: number;
+  dayGroups?: DayGroup[];
+  groupedDays?: GroupedDay[];
+  restaurantSuggestions?: RestaurantSuggestion[];
+  selectedRestaurantIds?: string[];
+  wantsRestaurants?: boolean;
 }
 
 export interface TripInfo {
@@ -279,5 +288,117 @@ export async function suggestMealsNearby(
   return fetchJson(`${BASE_URL}/suggest-meals-nearby`, {
     method: "POST",
     body: JSON.stringify({ sessionId, dayNumber, selectedActivities }),
+  });
+}
+
+// ==================== NEW ACTIVITY-FIRST FLOW API ====================
+
+export interface SuggestedActivity {
+  id: string;
+  name: string;
+  type: string;
+  description: string;
+  estimatedDuration: string;
+  estimatedCost: number | null;
+  bestTimeOfDay: "morning" | "afternoon" | "evening" | "any";
+  neighborhood?: string | null;
+  coordinates?: { lat: number; lng: number } | null;
+  rating?: number | null;
+  place_id?: string | null;
+  opening_hours?: string | null;
+}
+
+export interface DayGroup {
+  dayNumber: number;
+  date: string;
+  theme: string;
+  activityIds: string[];
+}
+
+export interface RestaurantSuggestion {
+  id: string;
+  name: string;
+  cuisine: string | null;
+  rating: number | null;
+  priceRange: string | null;
+  coordinates: { lat: number; lng: number };
+  place_id: string;
+  vicinity: string | null;
+  photo_url?: string | null;
+}
+
+export interface GroupedDay {
+  dayNumber: number;
+  date: string;
+  theme: string;
+  activities: SuggestedActivity[];
+  restaurants: RestaurantSuggestion[];
+}
+
+// Suggest top 15 activities for the entire trip
+export async function suggestTopActivities(sessionId: string): Promise<SessionResponse> {
+  return fetchJson(`${BASE_URL}/suggest-activities`, {
+    method: "POST",
+    body: JSON.stringify({ sessionId }),
+  });
+}
+
+// Select activities from the top 15
+export async function selectActivities(
+  sessionId: string,
+  selectedActivityIds: string[]
+): Promise<SessionResponse> {
+  return fetchJson(`${BASE_URL}/select-activities`, {
+    method: "POST",
+    body: JSON.stringify({ sessionId, selectedActivityIds }),
+  });
+}
+
+// Group selected activities into days
+export async function groupDays(sessionId: string): Promise<SessionResponse> {
+  return fetchJson(`${BASE_URL}/group-days`, {
+    method: "POST",
+    body: JSON.stringify({ sessionId }),
+  });
+}
+
+// Adjust day groupings (move activity between days)
+export async function adjustDayGroups(
+  sessionId: string,
+  activityId: string,
+  fromDay: number,
+  toDay: number
+): Promise<SessionResponse> {
+  return fetchJson(`${BASE_URL}/adjust-day-groups`, {
+    method: "POST",
+    body: JSON.stringify({ sessionId, activityId, fromDay, toDay }),
+  });
+}
+
+// Confirm day groupings
+export async function confirmDayGrouping(sessionId: string): Promise<SessionResponse> {
+  return fetchJson(`${BASE_URL}/confirm-day-grouping`, {
+    method: "POST",
+    body: JSON.stringify({ sessionId }),
+  });
+}
+
+// Get restaurant suggestions near activities
+export async function getRestaurantSuggestions(sessionId: string): Promise<SessionResponse> {
+  return fetchJson(`${BASE_URL}/get-restaurant-suggestions`, {
+    method: "POST",
+    body: JSON.stringify({ sessionId }),
+  });
+}
+
+// Set meal preferences (add or skip restaurants)
+export async function setMealPreferences(
+  sessionId: string,
+  wantsRestaurants: boolean,
+  selectedRestaurantIds?: string[]
+): Promise<SessionResponse> {
+  return fetchJson(`${BASE_URL}/meal-preferences`, {
+    method: "POST",
+    body: JSON.stringify({ sessionId, wantsRestaurants, selectedRestaurantIds }),
   });
 }

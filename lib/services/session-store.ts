@@ -1,12 +1,30 @@
 import { randomUUID } from "crypto";
-import type { TripInfo, SkeletonItinerary, ExpandedDay, TravelPlan, StoredSuggestions, StoredActivitySuggestions, StoredMealSuggestions } from "@/lib/models/travel-plan";
+import type {
+  TripInfo,
+  SkeletonItinerary,
+  ExpandedDay,
+  TravelPlan,
+  StoredSuggestions,
+  StoredActivitySuggestions,
+  StoredMealSuggestions,
+  SuggestedActivity,
+  DayGroup,
+  GroupedDay,
+  RestaurantSuggestion,
+} from "@/lib/models/travel-plan";
 
 export const WORKFLOW_STATES = {
   INFO_GATHERING: "INFO_GATHERING",
-  SKELETON: "SKELETON",
-  EXPAND_DAY: "EXPAND_DAY",
+  SUGGEST_ACTIVITIES: "SUGGEST_ACTIVITIES",
+  SELECT_ACTIVITIES: "SELECT_ACTIVITIES",
+  GROUP_DAYS: "GROUP_DAYS",
+  DAY_ITINERARY: "DAY_ITINERARY",
+  MEAL_PREFERENCES: "MEAL_PREFERENCES",
   REVIEW: "REVIEW",
   FINALIZE: "FINALIZE",
+  // Legacy states (kept for backwards compatibility during migration)
+  SKELETON: "SKELETON",
+  EXPAND_DAY: "EXPAND_DAY",
 } as const;
 
 export type WorkflowState = (typeof WORKFLOW_STATES)[keyof typeof WORKFLOW_STATES];
@@ -22,14 +40,25 @@ export interface Session {
   lastAccessed: number;
   workflowState: WorkflowState;
   tripInfo: TripInfo;
+  conversationHistory: ConversationMessage[];
+  finalPlan: TravelPlan | null;
+
+  // New activity-first flow fields
+  suggestedActivities: SuggestedActivity[];
+  selectedActivityIds: string[];
+  dayGroups: DayGroup[];
+  groupedDays: GroupedDay[];
+  restaurantSuggestions: RestaurantSuggestion[];
+  selectedRestaurantIds: string[];
+  wantsRestaurants: boolean | null;
+
+  // Legacy fields (kept for backwards compatibility during migration)
   skeleton: SkeletonItinerary | null;
   expandedDays: Record<number, ExpandedDay>;
   currentExpandDay: number | null;
   currentSuggestions: StoredSuggestions | null;
   currentActivitySuggestions: StoredActivitySuggestions | null;
   currentMealSuggestions: StoredMealSuggestions | null;
-  conversationHistory: ConversationMessage[];
-  finalPlan: TravelPlan | null;
 }
 
 class SessionStore {
@@ -61,14 +90,25 @@ class SessionStore {
         travelers: 1,
         budget: null,
       },
+      conversationHistory: [],
+      finalPlan: null,
+
+      // New activity-first flow fields
+      suggestedActivities: [],
+      selectedActivityIds: [],
+      dayGroups: [],
+      groupedDays: [],
+      restaurantSuggestions: [],
+      selectedRestaurantIds: [],
+      wantsRestaurants: null,
+
+      // Legacy fields
       skeleton: null,
       expandedDays: {},
       currentExpandDay: null,
       currentSuggestions: null,
       currentActivitySuggestions: null,
       currentMealSuggestions: null,
-      conversationHistory: [],
-      finalPlan: null,
     };
 
     this.sessions.set(sessionId, session);
@@ -129,6 +169,66 @@ class SessionStore {
     }
 
     session.expandedDays[dayNumber] = dayData;
+    session.lastAccessed = Date.now();
+    return session;
+  }
+
+  // New activity-first flow helpers
+  setSuggestedActivities(sessionId: string, activities: SuggestedActivity[]): Session | null {
+    const session = this.get(sessionId);
+    if (!session) return null;
+    session.suggestedActivities = activities;
+    session.lastAccessed = Date.now();
+    return session;
+  }
+
+  setSelectedActivities(sessionId: string, activityIds: string[]): Session | null {
+    const session = this.get(sessionId);
+    if (!session) return null;
+    session.selectedActivityIds = activityIds;
+    session.lastAccessed = Date.now();
+    return session;
+  }
+
+  setDayGroups(sessionId: string, dayGroups: DayGroup[]): Session | null {
+    const session = this.get(sessionId);
+    if (!session) return null;
+    session.dayGroups = dayGroups;
+    session.lastAccessed = Date.now();
+    return session;
+  }
+
+  setGroupedDays(sessionId: string, groupedDays: GroupedDay[]): Session | null {
+    const session = this.get(sessionId);
+    if (!session) return null;
+    session.groupedDays = groupedDays;
+    session.lastAccessed = Date.now();
+    return session;
+  }
+
+  updateDayGroup(sessionId: string, dayNumber: number, activityIds: string[]): Session | null {
+    const session = this.get(sessionId);
+    if (!session) return null;
+    const dayGroup = session.dayGroups.find((d) => d.dayNumber === dayNumber);
+    if (dayGroup) {
+      dayGroup.activityIds = activityIds;
+    }
+    session.lastAccessed = Date.now();
+    return session;
+  }
+
+  setRestaurantSuggestions(sessionId: string, restaurants: RestaurantSuggestion[]): Session | null {
+    const session = this.get(sessionId);
+    if (!session) return null;
+    session.restaurantSuggestions = restaurants;
+    session.lastAccessed = Date.now();
+    return session;
+  }
+
+  setSelectedRestaurants(sessionId: string, restaurantIds: string[]): Session | null {
+    const session = this.get(sessionId);
+    if (!session) return null;
+    session.selectedRestaurantIds = restaurantIds;
     session.lastAccessed = Date.now();
     return session;
   }

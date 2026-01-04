@@ -1,7 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
 import { sessionStore, WORKFLOW_STATES } from "@/lib/services/session-store";
-import { getLLMClient } from "@/lib/services/llm-client";
-import { getTravelPlanner } from "@/lib/travel-planner";
 
 export async function POST(request: NextRequest) {
   try {
@@ -22,36 +20,22 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    const llmClient = getLLMClient();
-    const llmResult = await llmClient.finalizePlan({
-      tripInfo: session.tripInfo,
-      expandedDays: session.expandedDays,
-    });
-
-    if (!llmResult.success) {
-      return NextResponse.json(llmResult, { status: 500 });
-    }
-
-    let finalPlan = llmResult.finalPlan;
-    try {
-      const planner = getTravelPlanner();
-      finalPlan = await planner.enrichFinalPlan(finalPlan);
-    } catch (enrichError) {
-      console.warn("Places enrichment failed, continuing without:", (enrichError as Error).message);
-    }
+    // For the new activity-first flow, the data is already enriched
+    // Just transition to FINALIZE state
+    const message = `Your itinerary for ${session.tripInfo.destination} is finalized! You have ${session.groupedDays.length} days planned with ${session.groupedDays.reduce((sum, d) => sum + d.activities.length, 0)} activities${session.groupedDays.reduce((sum, d) => sum + d.restaurants.length, 0) > 0 ? ` and ${session.groupedDays.reduce((sum, d) => sum + d.restaurants.length, 0)} restaurants` : ""}. Have a great trip!`;
 
     sessionStore.update(sessionId, {
       workflowState: WORKFLOW_STATES.FINALIZE,
-      finalPlan,
     });
-    sessionStore.addToConversation(sessionId, "assistant", llmResult.message);
+    sessionStore.addToConversation(sessionId, "assistant", message);
 
     return NextResponse.json({
       success: true,
       sessionId,
       workflowState: WORKFLOW_STATES.FINALIZE,
-      message: llmResult.message,
-      finalPlan,
+      message,
+      groupedDays: session.groupedDays,
+      tripInfo: session.tripInfo,
     });
   } catch (error) {
     console.error("Error in finalize:", error);

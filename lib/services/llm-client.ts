@@ -1,5 +1,13 @@
 import OpenAI from "openai";
-import { TravelPlanSchema, type TripInfo, type SkeletonDay, type ExpandedDay, type DaySuggestions } from "@/lib/models/travel-plan";
+import {
+  TravelPlanSchema,
+  type TripInfo,
+  type SkeletonDay,
+  type ExpandedDay,
+  type DaySuggestions,
+  type SuggestedActivity,
+  type DayGroup,
+} from "@/lib/models/travel-plan";
 import {
   buildTravelPlanPrompt,
   buildModifyItineraryMessages,
@@ -13,6 +21,9 @@ import {
   buildModifyDayMessages,
   buildReviewMessages,
   buildFinalizeMessages,
+  buildSuggestTopActivitiesMessages,
+  buildGroupActivitiesMessages,
+  buildRegenerateDayThemeMessages,
 } from "./prompts";
 
 const DEFAULT_MODEL = "gpt-4o-mini";
@@ -510,6 +521,109 @@ class LLMClient {
         success: false,
         message: "Sorry, I couldn't finalize the itinerary. Please try again.",
         finalPlan: null,
+      };
+    }
+  }
+
+  // ============================================
+  // NEW FLOW: Activity-First Planning Methods
+  // ============================================
+
+  async suggestTopActivities({ tripInfo }: { tripInfo: TripInfo }): Promise<{
+    success: boolean;
+    message: string;
+    activities: SuggestedActivity[];
+  }> {
+    const messages = buildSuggestTopActivitiesMessages({ tripInfo });
+
+    try {
+      const completion = await this.openai.chat.completions.create({
+        messages,
+        model: this.model,
+        temperature: this.temperature,
+        response_format: { type: "json_object" },
+      });
+
+      const response = this._parseJsonResponse(completion);
+
+      return {
+        success: true,
+        message: response.message,
+        activities: response.activities || [],
+      };
+    } catch (error) {
+      console.error("Error suggesting top activities:", error);
+      return {
+        success: false,
+        message: "Sorry, I couldn't generate activity suggestions. Please try again.",
+        activities: [],
+      };
+    }
+  }
+
+  async groupActivitiesIntoDays({
+    tripInfo,
+    activities,
+  }: {
+    tripInfo: TripInfo;
+    activities: SuggestedActivity[];
+  }): Promise<{
+    success: boolean;
+    message: string;
+    dayGroups: DayGroup[];
+  }> {
+    const messages = buildGroupActivitiesMessages({ tripInfo, activities });
+
+    try {
+      const completion = await this.openai.chat.completions.create({
+        messages,
+        model: this.model,
+        temperature: this.temperature,
+        response_format: { type: "json_object" },
+      });
+
+      const response = this._parseJsonResponse(completion);
+
+      return {
+        success: true,
+        message: response.message,
+        dayGroups: response.dayGroups || [],
+      };
+    } catch (error) {
+      console.error("Error grouping activities into days:", error);
+      return {
+        success: false,
+        message: "Sorry, I couldn't organize the activities into days. Please try again.",
+        dayGroups: [],
+      };
+    }
+  }
+
+  async regenerateDayTheme({ activities }: { activities: SuggestedActivity[] }): Promise<{
+    success: boolean;
+    theme: string;
+  }> {
+    const messages = buildRegenerateDayThemeMessages({ activities });
+
+    try {
+      const completion = await this.openai.chat.completions.create({
+        messages,
+        model: this.model,
+        temperature: this.temperature,
+        response_format: { type: "json_object" },
+      });
+
+      const response = this._parseJsonResponse(completion);
+
+      return {
+        success: true,
+        theme: response.theme || "Exploring the City",
+      };
+    } catch (error) {
+      console.error("Error regenerating day theme:", error);
+      return {
+        success: false,
+        theme: "A Day of Adventures",
       };
     }
   }
